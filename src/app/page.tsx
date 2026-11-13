@@ -183,8 +183,9 @@ function HomeContent() {
         {/* 搜索区 */}
         <section className={cn('flex flex-col items-center', urlQuery ? 'mb-6' : 'mt-8 mb-8')}>
           {!urlQuery && (
-            <header className="text-center mb-6">
+            <header className="mb-6 flex items-baseline justify-center gap-2">
               <h1 className="text-4xl sm:text-5xl font-bold brand-gradient">LibreTV</h1>
+              <span className="text-sm font-medium text-zinc-400">源源的电视机</span>
             </header>
           )}
           {urlQuery && <h1 className="sr-only">LibreTV 视频搜索</h1>}
