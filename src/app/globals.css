@@ -218,3 +218,18 @@ body {
     min-width: 40px !important;
   }
 }
+
+/*
+ * 竖屏下点「网页全屏」时横屏放大：iOS Safari 不支持 screen.orientation.lock，
+ * 改用 CSS 把播放器旋转 90° 放满屏。只在竖屏生效，横屏时不旋转；
+ * 退出网页全屏（类名被摘掉）时自动复原。
+ */
+@media (orientation: portrait) {
+  .libretv-rotate-landscape {
+    width: 100vh !important;
+    height: 100vw !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%) rotate(90deg) !important;
+  }
+}
