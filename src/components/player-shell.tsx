@@ -537,7 +537,7 @@ export function PlayerShell({
       setting: true,
       playbackRate: true,
       aspectRatio: true,
-      fullscreen: true,
+      fullscreen: false,
       fullscreenWeb: true,
       // 恒传 true，不跟设置项走：库的 miniProgressBar 插件只在构造时注册、运行时不可换，
       // 而它正是「控制栏显示时摘掉 art-mini-progress-bar」的唯一维护者。设置项只负责
