@@ -610,6 +610,12 @@ export function PlayerShell({
     // 全屏切换 / 播放器尺寸变化会重建控件，色带随之被清掉，这里补一次重绘
     art.on('fullscreen', renderSkipMarks);
     art.on('fullscreenWeb', renderSkipMarks);
+    // 竖屏下点「网页全屏」时横屏放大：iOS 不支持 orientation.lock，改用 CSS 把播放器旋转 90°。
+    // 类名只标记「正在网页全屏」，是否旋转由 globals.css 里的 portrait 媒体查询决定；
+    // 退出全屏或转回横屏时自动复原。
+    art.on('fullscreenWeb', (state: boolean) => {
+      art.template?.$player?.classList.toggle('libretv-rotate-landscape', state);
+    });
     art.on('resize', renderSkipMarks);
 
     /**
