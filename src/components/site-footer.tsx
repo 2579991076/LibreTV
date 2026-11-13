@@ -92,15 +92,10 @@ export function SiteFooter() {
   return (
     <footer className="border-t border-line py-4">
       <p className="text-center text-xs text-faint">
-        <a
-          href="https://github.com/LibreSpark/LibreTV"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="group relative inline-block cursor-help hover:text-accent"
-        >
-          LibreTV{version ? ` v${version}` : ''}
+        <span className="group relative inline-block cursor-help hover:text-accent">
+          源源的电视机{version ? ` v${version}` : ''}
           {version && <UpdateTip update={upstreamUpdate} />}
-        </a>
+        </span>
         {' · '}
         AGPL-3.0 License
       </p>
