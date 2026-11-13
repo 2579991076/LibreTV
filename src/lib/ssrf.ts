@@ -252,12 +252,14 @@ export const installConnectionSSRFProtection = installFetchSSRFProtection;
 // 模块加载时自动安装防护
 installFetchSSRFProtection();
 
-/**
- * 在受连接级 SSRF / DNS Rebinding 防护的作用域中执行异步请求
- */
 export function runWithSSRFProtection<T>(
   options: { allowPrivate?: boolean } = {},
   fn: () => Promise<T>
 ): Promise<T> {
-  return ssrfStorage.run({ active: true, allowPrivate: options.allowPrivate }, fn);
+  // 自定义 undici Agent（safeLookup / buildConnector）在 Vercel 的 Node 运行时上不兼容，
+  // 会抛 InvalidArgumentError: invalid onError method，导致所有上游请求失败。
+  // 因此不再注入专属 Agent，直接执行；SSRF 防护由调用方的 checkUpstreamAllowed /
+  // checkLiveUrlAllowed 显式预检（DNS + 私网 IP 校验）承担。
+  void options;
+  return fn();
 }
