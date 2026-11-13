@@ -304,9 +304,68 @@ function stripLeadingDisc(content: string): string {
  * 1. URL 特征中插段（adjump 等，任意位置）；
  * 2. 长正片段之间的超短插入段（纯时长型中插广告）；
  * 3. 片头无特征插入段（dytt 式，位置+短小启发式）；
- * 最后统一清掉首分片前失去语义的 DISCONTINUITY。
+ * 4. 与正片主域名不同的分片（换域名插广告，需传入播放列表地址）；最后统一清掉首分片前失去语义的 DISCONTINUITY。
  */
-export function stripAdGroups(m3u8Content: string): string {
+/** 取 URL 的域名（小写），解析失败返回 null。 */
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 域名不同的分片一律视为插播广告并滤掉（换域名插广告的源）。
+ * 正片主域名取分片里出现次数最多的域名（相对地址按 baseUrl 换算）：
+ * 多 CDN 的源分片都在同一域名下，不会误杀；只有少数分片换了域名才会被丢掉。
+ * 没有 #EXTINF 的主播放列表不处理，避免误删不同域名的清晰度子列表。
+ * 未传入 baseUrl 时直接返回原内容。
+ */
+export function stripCrossDomainSegments(m3u8Content: string, baseUrl?: string): string {
+  if (!m3u8Content || !baseUrl || !hostOf(baseUrl) || !m3u8Content.includes('#EXTINF')) return m3u8Content;
+  const lines = m3u8Content.split('\n');
+  const hosts = new Map<string, number>();
+  const resolvedHosts: (string | null)[] = [];
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) {
+      resolvedHosts.push(null);
+      continue;
+    }
+    let host: string | null = null;
+    try {
+      host = new URL(line, baseUrl).hostname.toLowerCase();
+    } catch {
+      host = null;
+    }
+    resolvedHosts.push(host);
+    if (host) hosts.set(host, (hosts.get(host) ?? 0) + 1);
+  }
+  if (hosts.size <= 1) return m3u8Content;
+  let mainHost = '';
+  let mainCount = 0;
+  const playlistHost = hostOf(baseUrl);
+  for (const [host, count] of hosts) {
+    if (count > mainCount || (count === mainCount && host === playlistHost)) {
+      mainHost = host;
+      mainCount = count;
+    }
+  }
+  if (!mainHost) return m3u8Content;
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (resolvedHosts[i] && resolvedHosts[i] !== mainHost) {
+      const prev = out[out.length - 1];
+      if (prev !== undefined && prev.trim().startsWith('#EXTINF')) out.pop();
+      continue;
+    }
+    out.push(lines[i]);
+  }
+  return out.join('\n');
+}
+
+export function stripAdGroups(m3u8Content: string, baseUrl?: string): string {
   if (!m3u8Content) return '';
-  return stripLeadingDisc(stripLeadAdGroup(stripInterstitialAdGroups(stripMarkedAdGroups(m3u8Content))));
+  return stripCrossDomainSegments(stripLeadingDisc(stripLeadAdGroup(stripInterstitialAdGroups(stripMarkedAdGroups(m3u8Content)))), baseUrl);
 }

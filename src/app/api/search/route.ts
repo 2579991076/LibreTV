@@ -170,6 +170,11 @@ function aggregateOutcomes(outcomes: SourceSearchOutcome[], wd: string, filterAd
     const aExact = normalizeTitle(a.name || '') === exact ? 0 : 1;
     const bExact = normalizeTitle(b.name || '') === exact ? 0 : 1;
     if (aExact !== bExact) return aExact - bExact;
+    // 干净源（无广告/少广告）优先：光速、极速、如意排在其他源前面
+    const CLEAN_SOURCES = ['光速', '极速', '如意'];
+    const aClean = CLEAN_SOURCES.some((name) => (a.sourceName || '').includes(name));
+    const bClean = CLEAN_SOURCES.some((name) => (b.sourceName || '').includes(name));
+    if (aClean !== bClean) return aClean ? -1 : 1;
     const nameCompare = (a.name || '').localeCompare(b.name || '', 'zh-Hans-CN');
     if (nameCompare !== 0) return nameCompare;
     return (a.sourceName || '').localeCompare(b.sourceName || '', 'zh-Hans-CN');

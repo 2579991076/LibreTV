@@ -2,8 +2,8 @@ import type { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: '源源的电视机 - 免费在线视频搜索与观看平台',
-    short_name: '源源的电视机',
+    name: '源源の放映室 - 免费在线视频搜索与观看平台',
+    short_name: '源源の放映室',
     description: '免费在线视频搜索与观看平台',
     start_url: '/',
     display: 'standalone',

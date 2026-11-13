@@ -93,7 +93,7 @@ export function SiteFooter() {
     <footer className="border-t border-line py-4">
       <p className="text-center text-xs text-faint">
         <span className="group relative inline-block cursor-help hover:text-accent">
-          源源的电视机{version ? ` v${version}` : ''}
+          源源の放映室{version ? ` v${version}` : ''}
           {version && <UpdateTip update={upstreamUpdate} />}
         </span>
         {' · '}

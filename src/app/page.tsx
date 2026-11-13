@@ -42,6 +42,7 @@ function HomeContent() {
   const customAPIs = useAppStore((s) => s.customAPIs);
   const envSources = useAppStore((s) => s.envSources);
   const selectedKeys = useAppStore((s) => s.selectedKeys);
+  const recommendSource = useAppStore((s) => s.recommendSource);
   const yellowFilter = useAppStore((s) => s.yellowFilter);
   const sourceHealth = useAppStore((s) => s.sourceHealth);
   const subscriptions = useAppStore((s) => s.subscriptions);
@@ -184,10 +185,10 @@ function HomeContent() {
         <section className={cn('flex flex-col items-center', urlQuery ? 'mb-6' : 'mt-8 mb-8')}>
           {!urlQuery && (
             <header className="text-center mb-6">
-              <h1 className="text-4xl sm:text-5xl font-bold brand-gradient">源源的电视机</h1>
+              <h1 className="text-4xl sm:text-5xl font-bold brand-gradient">源源の放映室</h1>
             </header>
           )}
-          {urlQuery && <h1 className="sr-only">源源的电视机 视频搜索</h1>}
+          {urlQuery && <h1 className="sr-only">源源の放映室 视频搜索</h1>}
           {/* 定位容器比胶囊宽一圈：浮层按它的宽度对齐，接缝处不会与胶囊边框错位 1px */}
           <div ref={searchHistory.containerRef} className="relative w-full max-w-2xl">
             <form
@@ -265,6 +266,22 @@ function HomeContent() {
                 </button>
               </div>
             </form>
+
+  {/* 快捷分类：短剧内容来自如意/量子/暴风/360 等源，点击即搜索“短剧” */}
+  <div className="mt-3 flex flex-wrap items-center gap-1.5">
+    <span className="text-xs text-faint">快捷分类：</span>
+    <button
+      type="button"
+      className="px-2.5 py-1 rounded-full text-xs bg-chip text-muted hover:text-content hover:bg-hover transition-colors"
+      onClick={() => {
+        setInput('短剧');
+        runSearch('短剧');
+      }}
+    >
+      短剧
+    </button>
+  </div>
+
 
             {/* 最近搜索：与输入框无缝拼接；浮层不占文档流，出现/消失不会顶动下方内容 */}
             {searchHistory.visible && (
@@ -373,6 +390,18 @@ function HomeContent() {
             }}
           />
         )}
+
+  {/* 热门推荐：锁定豆瓣无限滚动（默认推荐源为热榜/新番时才额外显示，避免与上方推荐区重复） */}
+  {!urlQuery && recommendSource !== 'douban' && (
+    <RecommendSection
+      source="douban"
+      title="热门推荐"
+      onPick={(title) => {
+        setInput(title);
+        runSearch(title);
+      }}
+    />
+  )}
       </main>
 
       <SiteFooter />
@@ -410,7 +439,7 @@ function NoSourceGuide({ hasSources = false }: { hasSources?: boolean }) {
           <>点击右上角「设置」，勾选要参与搜索的点播源后重新搜索。</>
         ) : (
           <>
-            源源的电视机 不内置任何采集站。点击右上角「设置 → 添加 API」，填入一个
+            源源の放映室 不内置任何采集站。点击右上角「设置 → 添加 API」，填入一个
             Apple CMS 采集站地址（如 <code className="text-accent text-xs">https://example.com/api.php/provide/vod</code>），
             勾选后即可开始搜索。
           </>

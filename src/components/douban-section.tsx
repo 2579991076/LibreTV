@@ -13,15 +13,39 @@ const MOVIE_TAGS = ['热门', '最新', '经典', '豆瓣高分', '冷门佳片'
 const TV_TAGS = ['热门', '美剧', '英剧', '韩剧', '日剧', '国产剧', '港剧', '日本动画', '综艺', '纪录片'];
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
-/** 首页推荐区：数据源由设置决定（豆瓣热门 / Bangumi 新番放送 / 影视热榜），二选一展示 */
-export function RecommendSection({ onPick }: { onPick: (title: string) => void }) {
+/**
+ * 首页推荐区：数据源默认由设置决定（豆瓣热门 / Bangumi 新番放送 / 影视热榜），二选一展示。
+ * 传入 source 可锁定某一数据源、传入 title 则在区块上方显示标题（首页“热门推荐”区块用）。
+ */
+export function RecommendSection({
+  onPick,
+  source,
+  title,
+}: {
+  onPick: (title: string) => void;
+  source?: 'douban' | 'bangumi' | 'hot-list';
+  title?: string;
+}) {
   const doubanEnabled = useAppStore((s) => s.doubanEnabled);
   const recommendSource = useAppStore((s) => s.recommendSource);
+  const effectiveSource = source ?? recommendSource;
 
   if (!doubanEnabled) return null;
-  if (recommendSource === 'bangumi') return <BangumiView onPick={onPick} />;
-  if (recommendSource === 'hot-list') return <HotListView onPick={onPick} />;
-  return <DoubanView onPick={onPick} />;
+  const content =
+    effectiveSource === 'bangumi' ? (
+      <BangumiView onPick={onPick} />
+    ) : effectiveSource === 'hot-list' ? (
+      <HotListView onPick={onPick} />
+    ) : (
+      <DoubanView onPick={onPick} />
+    );
+  if (!title) return content;
+  return (
+    <section aria-label={title} className="mt-8">
+      <h2 className="text-lg font-semibold text-content mb-3">{title}</h2>
+      {content}
+    </section>
+  );
 }
 
 /**
@@ -179,9 +203,14 @@ const HOT_LISTS = [
   { id: 'douban_show_chinese', label: '国内综艺' },
   { id: 'douban_show_global', label: '海外综艺' },
   { id: 'baidu_teleplay', label: '百度热播剧' },
+  { id: 'douban_tag_tv_american', label: '美剧周榜' },
+  { id: 'douban_tag_tv_korean', label: '韩剧周榜' },
+  { id: 'douban_tag_tv_anime', label: '动漫周榜' },
+  { id: 'douban_tag_tv_variety', label: '综艺周榜' },
+  { id: 'douban_tag_movie_latest', label: '最新上映' },
 ];
 
-/** 影视热榜（60s API）：豆瓣五个周榜 + 百度热播剧，chips 切换 */
+/** 影视热榜：豆瓣周榜 + 百度热播剧（60s API）与豆瓣标签榜（美剧/韩剧/动漫/综艺/最新上映），chips 切换 */
 function HotListView({ onPick }: { onPick: (title: string) => void }) {
   const [listId, setListId] = useState(HOT_LISTS[0].id);
 

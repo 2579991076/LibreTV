@@ -1,5 +1,6 @@
 import type { DoubanItem } from './types';
 import { fetchUpstream, getCache, setCache } from './fetch-utils';
+import { fetchDoubanRecommend } from './douban';
 
 /**
  * 影视热榜聚合（经 60s API，免 key，https://github.com/vikiboss/60s）。
@@ -18,7 +19,7 @@ function apiBase(): string {
   return (process.env['60S_API_BASE'] || 'https://60s.crystelf.top').replace(/\/+$/, '');
 }
 
-/** 榜单标识：豆瓣五个周榜 + 百度热播剧榜 */
+/** 榜单标识：豆瓣五个周榜 + 百度热播剧榜 + 五个豆瓣标签榜 */
 export const HOT_LIST_IDS = [
   'douban_movie_weekly',
   'douban_tv_chinese',
@@ -26,6 +27,11 @@ export const HOT_LIST_IDS = [
   'douban_show_chinese',
   'douban_show_global',
   'baidu_teleplay',
+  'douban_tag_tv_american',
+  'douban_tag_tv_korean',
+  'douban_tag_tv_anime',
+  'douban_tag_tv_variety',
+  'douban_tag_movie_latest',
 ] as const;
 
 export type HotListId = (typeof HOT_LIST_IDS)[number];
@@ -40,6 +46,15 @@ const DOUBAN_WEEKLY_CATEGORY: Partial<Record<HotListId, string>> = {
   douban_tv_global: 'tv_global',
   douban_show_chinese: 'show_chinese',
   douban_show_global: 'show_global',
+};
+
+/** 豆瓣标签榜：60s 周榜只有 Top-10 且分类固定，这些分类直接走豆瓣推荐接口，每榜取 20 条 */
+const DOUBAN_TAG_LISTS: Partial<Record<HotListId, { type: 'movie' | 'tv'; tag: string }>> = {
+  douban_tag_tv_american: { type: 'tv', tag: '美剧' },
+  douban_tag_tv_korean: { type: 'tv', tag: '韩剧' },
+  douban_tag_tv_anime: { type: 'tv', tag: '日本动画' },
+  douban_tag_tv_variety: { type: 'tv', tag: '综艺' },
+  douban_tag_movie_latest: { type: 'movie', tag: '最新' },
 };
 
 // —— 60s API 原始结构（只取用到的字段） ——
@@ -122,8 +137,11 @@ export async function fetchHotList(id: HotListId): Promise<DoubanItem[]> {
 
   let items: DoubanItem[];
 
+  const tagList = DOUBAN_TAG_LISTS[id];
   const category = DOUBAN_WEEKLY_CATEGORY[id];
-  if (category) {
+  if (tagList) {
+    items = await fetchDoubanRecommend(tagList.type, tagList.tag, 0, 20);
+  } else if (category) {
     const raw = (await fetchJson(`/v2/douban/weekly/${category}`)) as SixtyResponse<DoubanWeeklyRaw[]>;
     const isTv = id !== 'douban_movie_weekly';
     items = assertArray<DoubanWeeklyRaw>(raw.data, '豆瓣周榜')

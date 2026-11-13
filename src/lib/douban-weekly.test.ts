@@ -5,6 +5,11 @@ describe('isHotListId', () => {
   it('白名单校验', () => {
     expect(isHotListId('douban_movie_weekly')).toBe(true);
     expect(isHotListId('baidu_teleplay')).toBe(true);
+  expect(isHotListId('douban_tag_tv_american')).toBe(true);
+  expect(isHotListId('douban_tag_tv_korean')).toBe(true);
+  expect(isHotListId('douban_tag_tv_anime')).toBe(true);
+  expect(isHotListId('douban_tag_tv_variety')).toBe(true);
+  expect(isHotListId('douban_tag_movie_latest')).toBe(true);
     expect(isHotListId('maoyan')).toBe(false);
     expect(isHotListId('')).toBe(false);
   });

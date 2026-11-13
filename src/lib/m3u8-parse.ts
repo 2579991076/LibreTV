@@ -117,7 +117,7 @@ export async function parseM3u8Playlist(
   const res = await fetch(base, { headers: { Accept: '*/*' } });
   if (!res.ok) throw new Error(`m3u8 拉取失败：HTTP ${res.status}`);
   // 剔除片头广告段要在统计时长/分片之前做，下载产物才不会带上广告
-  const text = opts?.stripLeadAd === false ? await res.text() : stripAdGroups(await res.text());
+  const text = opts?.stripLeadAd === false ? await res.text() : stripAdGroups(await res.text(), res.url);
 
   // —— master：收集变体，选档后递归 ——
   if (text.includes('#EXT-X-STREAM-INF')) {

@@ -52,7 +52,7 @@ export function createHlsLoader(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             callbacks.onSuccess = function (response: any, stats: any, ctx: any, networkDetails: any) {
               if (response.data && typeof response.data === 'string') {
-                response.data = stripAdGroups(response.data);
+                response.data = stripAdGroups(response.data, context.url);
               }
               onSuccess(response, stats, ctx, networkDetails);
             };
