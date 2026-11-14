@@ -17,7 +17,6 @@ export interface AppSettings {
   customAPIs: SourceConfig[];
   selectedKeys: string[];
   yellowFilter: boolean;
-  adFilter: boolean;
   doubanEnabled: boolean;
   /** 首页推荐数据源：豆瓣热门 / Bangumi 每日放送（免 key）/ 影视热榜（60s API） */
   recommendSource: 'douban' | 'bangumi' | 'hot-list';
@@ -344,7 +343,6 @@ export const useAppStore = create<AppState>()(
       envSubsSeen: [],
       selectedKeys: [],
       yellowFilter: true,
-      adFilter: true,
       doubanEnabled: true,
       recommendSource: 'hot-list',
       recommendSourceTouched: false,
@@ -945,7 +943,6 @@ export const useAppStore = create<AppState>()(
         qualityMap: s.qualityMap,
         envSubsSeen: s.envSubsSeen,
         yellowFilter: s.yellowFilter,
-        adFilter: s.adFilter,
         doubanEnabled: s.doubanEnabled,
         recommendSource: s.recommendSource,
         recommendSourceTouched: s.recommendSourceTouched,

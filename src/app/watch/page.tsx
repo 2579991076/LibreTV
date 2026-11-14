@@ -322,7 +322,6 @@ function WatchContent() {
                 <PlayerShell
                   url={currentUrl}
                   title={videoTitle}
-                  adFilter={store.adFilter}
                   autoplayNext={store.autoplayNext}
                   skipMark={skipMark}
                   autoSkipSegments={store.autoSkipSegments}
@@ -332,9 +331,6 @@ function WatchContent() {
                   onPendingStart={setPendingStart}
                   onPlayerApi={(api) => { playerApiRef.current = api; }}
                   onRecordSegment={handleRecordSegment}
-                  episodeKey={`${sourceKey}:${vodId}:${currentIndex}`}
-                  nextUrl={currentIndex + 1 < episodes.length ? episodes[currentIndex + 1] : undefined}
-                  nextEpisodeKey={currentIndex + 1 < episodes.length ? `${sourceKey}:${vodId}:${currentIndex + 1}` : undefined}
                   getRestorePosition={getRestorePosition}
                   onTimeUpdate={handleProgress}
                   onPause={handleProgress}

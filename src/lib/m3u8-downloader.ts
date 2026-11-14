@@ -273,7 +273,7 @@ export async function runDownloadJob(opts: DownloadJobOptions): Promise<void> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      parsed = await parseM3u8Playlist(playlistUrl, 0, undefined, { stripLeadAd: true });
+      parsed = await parseM3u8Playlist(playlistUrl, 0, undefined);
       lastErr = undefined;
       break;
     } catch (err) {

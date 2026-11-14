@@ -1,10 +1,10 @@
-import { makeAbsolute, stripAdGroups, documentBaseURI } from './m3u8';
+import { makeAbsolute, documentBaseURI } from './m3u8';
 
 /**
  * m3u8 播放列表解析（预取器与离线下载共用）。
  *
  * 与 hls.js loader 侧的一致性是本地缓存命中的前提：
- * 两侧都通过 `new URL()` 绝对化地址（见 video-cache.buildSegmentCacheKey），
+ * 两侧都通过 `new URL()` 绝对化地址（与播放器的分片地址归一化一致），
  * 因此这里对分片地址也必须用同一构造器抹平默认端口 / 百分号编码差异。
  * 但仅有同一构造器不够——基址本身可能就是根相对的代理形式，
  * `new URL(相对分片, 相对基址)` 会抛错并原样返回，所以入参要先锚到文档基址。
@@ -97,17 +97,11 @@ function parseAesConf(line: string): AesConf | undefined {
   return { method, uri, iv };
 }
 
-export interface ParseOptions {
-  /** 剔除广告段（URL 特征的中插段 + 片头无特征插入段）；缺省 true */
-  stripLeadAd?: boolean;
-}
-
 /** 解析播放列表：master 递归选档，media 输出分片清单。fetch 失败 / 超限直接抛错由调用方降级 */
 export async function parseM3u8Playlist(
   url: string,
   depth = 0,
-  preferredHeight?: number,
-  opts?: ParseOptions
+  preferredHeight?: number
 ): Promise<ParsedPlaylist> {
   if (depth > MAX_DEPTH) throw new Error(`m3u8 嵌套超过 ${MAX_DEPTH} 层`);
   // 入参本身可能是本站根相对地址（代理形态），先锚成绝对地址再作为解析基址：
@@ -116,8 +110,7 @@ export async function parseM3u8Playlist(
   const base = makeAbsolute(url, documentBaseURI());
   const res = await fetch(base, { headers: { Accept: '*/*' } });
   if (!res.ok) throw new Error(`m3u8 拉取失败：HTTP ${res.status}`);
-  // 剔除片头广告段要在统计时长/分片之前做，下载产物才不会带上广告
-  const text = opts?.stripLeadAd === false ? await res.text() : stripAdGroups(await res.text(), res.url);
+  const text = await res.text();
 
   // —— master：收集变体，选档后递归 ——
   if (text.includes('#EXT-X-STREAM-INF')) {
@@ -147,7 +140,7 @@ export async function parseM3u8Playlist(
     }
     if (!variants.length) throw new Error('master m3u8 未解析到可用档位');
     const chosen = pickVariant(variants, preferredHeight);
-    const inner = await parseM3u8Playlist(chosen.url, depth + 1, preferredHeight, opts);
+    const inner = await parseM3u8Playlist(chosen.url, depth + 1, preferredHeight);
     return { ...inner, variants };
   }
 
