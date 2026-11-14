@@ -6,6 +6,7 @@ import 'video.js/dist/video-js.css';
 
 import { PlaybackRecovery, describeHlsError } from '@/lib/playback-recovery';
 import { installVhsAdFilter, setVhsAdFilterEnabled } from '@/lib/vhs-ad-filter';
+import { installIOSFullscreenOverride } from '@/lib/videojs-ios-fullscreen';
 import {
   getVideoPrefetcher,
   getNextEpisodePrefetcher,
@@ -379,6 +380,9 @@ export function PlayerShell({
   const ensurePrefetch = (mediaUrl: string, currentTime: number, horizonSeconds?: number) => {
     const p = propsRef.current;
     if (!p.episodeKey) return;
+    // 原生 HLS（iOS/macOS Safari）：播放器不读预取缓存（VHS 不走、原生播放器
+    // 自己拉分片），预取等于重复下载，跳过。
+    if (supportsNativeHls()) return;
     getVideoPrefetcher().ensure({
       m3u8Url: mediaUrl,
       currentTime,
@@ -562,12 +566,15 @@ export function PlayerShell({
     if (!player) return;
     restoreCleanupRef.current?.();
     restoreCleanupRef.current = null;
-    // 原生 HLS + 去广告开着：清单走代理删广告（分片仍直连）；已是代理地址不重复包
+    // 原生 HLS + 去广告开着：清单走代理删广告（分片仍直连）；已是代理地址不重复包。
+    // 只包 HLS 清单：mp4/webm 等直连容器不走代理（否则整段视频数据都过 Netlify，
+    // 又慢又烧额度），去广告对它们也没有意义。
     let effectiveUrl = mediaUrl;
     if (
       !opts?.forceDirect &&
       propsRef.current.adFilter &&
       !mediaUrl.startsWith('/api/proxy') &&
+      sourceTypeOf(mediaUrl).type === 'application/x-mpegURL' &&
       supportsNativeHls()
     ) {
       effectiveUrl = `/api/proxy?url=${encodeURIComponent(mediaUrl)}&stripAds=1`;
@@ -677,13 +684,11 @@ export function PlayerShell({
     startCurrentTime: number;
     startVolume: number;
     volumeSide: boolean; // 垂直滑动：右半屏=音量，左半屏=亮度
-    rotated: boolean; // iOS 竖屏全屏时播放器被 CSS 旋转 90°，手势坐标需换算
     longPressTimer: ReturnType<typeof setTimeout> | null;
     longPressActive: boolean;
     longPressOriginalRate: number;
     lastTapAt: number;
     lastTapX: number;
-    lastTapY: number;
     singleTapTimer: ReturnType<typeof setTimeout> | null;
   }>({
     mode: 'none',
@@ -693,13 +698,11 @@ export function PlayerShell({
     startCurrentTime: 0,
     startVolume: 0,
     volumeSide: false,
-    rotated: false,
     longPressTimer: null,
     longPressActive: false,
     longPressOriginalRate: 1,
     lastTapAt: 0,
     lastTapX: 0,
-    lastTapY: 0,
     singleTapTimer: null,
   });
 
@@ -774,58 +777,9 @@ export function PlayerShell({
     });
     playerRef.current = player;
 
-    // —— iOS 全屏默认横屏：iPhone 上标准 Fullscreen API 只会按当前朝向（竖屏）铺满，
-    // 不会跟随手机转横屏；网页也无法像原生 App 那样强制转屏。
-    // 竖屏时改走 Video.js 的 enterFullWindow（网页全屏铺满视口）+ CSS 旋转 90°
-    //（globals.css 里 body.vjs-full-window 的 portrait 规则），点全屏就横屏，
-    // 不用关竖屏锁定；横屏时走原生 webkitEnterFullscreen。
-    // Video.js 优先走标准 API，这里在 iOS 上按朝向分流。
-    {
-      type NativeFSVideo = HTMLVideoElement & {
-        webkitEnterFullscreen?: () => void;
-        webkitExitFullScreen?: () => void;
-        webkitDisplayingFullscreen?: boolean;
-      };
-      type NativeFSTech = { enterFullScreen?: () => void; exitFullScreen?: () => void };
-      const nativeVideo = videoEl as NativeFSVideo;
-      const nativeTech = () => player.tech() as unknown as NativeFSTech | null;
-      const hasNativeFullscreen = () => typeof nativeVideo.webkitEnterFullscreen === 'function';
-      const isIOSPortrait = () =>
-        hasNativeFullscreen() && window.matchMedia('(orientation: portrait)').matches;
-      const origRequestFullscreen = player.requestFullscreen.bind(player);
-      const origExitFullscreen = player.exitFullscreen.bind(player);
-      player.requestFullscreen = ((options) => {
-        if (isIOSPortrait()) {
-          // 竖屏：网页全屏 + CSS 旋转 90°，默认横屏，不用关竖屏锁定
-          player.enterFullWindow();
-          return Promise.resolve();
-        }
-        if (hasNativeFullscreen()) {
-          try {
-            nativeTech()?.enterFullScreen?.();
-            return Promise.resolve();
-          } catch {
-            /* 失败则走标准路径 */
-          }
-        }
-        return origRequestFullscreen(options);
-      }) as typeof player.requestFullscreen;
-      player.exitFullscreen = (() => {
-        if (player.isFullWindow) {
-          player.exitFullWindow();
-          return Promise.resolve();
-        }
-        if (hasNativeFullscreen() && nativeVideo.webkitDisplayingFullscreen) {
-          try {
-            nativeTech()?.exitFullScreen?.();
-            return Promise.resolve();
-          } catch {
-            /* 失败则走标准路径 */
-          }
-        }
-        return origExitFullscreen();
-      }) as typeof player.exitFullscreen;
-    }
+    // iOS 全屏默认横屏（竖屏走网页全屏 + CSS 旋转 90°，横屏走原生全屏），
+    // 与直播 live-player 共用同一份逻辑（见 lib/videojs-ios-fullscreen）。
+    installIOSFullscreenOverride(player, videoEl);
 
     // —— 控制条自定义按钮 ——
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1347,15 +1301,7 @@ export function PlayerShell({
       g.startCurrentTime = (player.currentTime() ?? 0);
       g.startVolume = (player.volume() ?? 0);
       const rect = el?.getBoundingClientRect();
-      // 旋转全屏（iOS 竖屏全屏被 CSS 旋转 90°）：用户看到的“左右”是视口上下，
-      // “上下”是视口左右；滑动与双击位置都要按旋转后的方向换算。
-      g.rotated =
-        player.isFullWindow && window.matchMedia('(orientation: portrait)').matches;
-      g.volumeSide = rect
-        ? g.rotated
-          ? t.clientY > rect.top + rect.height / 2
-          : t.clientX > rect.left + rect.width / 2
-        : true;
+      g.volumeSide = rect ? t.clientX > rect.left + rect.width / 2 : true;
       g.longPressActive = false;
       // 长按 3 倍速：仅播放中生效；500ms 后触发
       if (!player.paused()) {
@@ -1375,11 +1321,8 @@ export function PlayerShell({
       if (isOnControl(e.target)) return;
       const t = e.changedTouches[0];
       if (!t) return;
-      // 旋转全屏时换算坐标：用户感知的横向 = 视口纵向，纵向 = 视口横向取反
-      const rawDx = t.clientX - g.startX;
-      const rawDy = t.clientY - g.startY;
-      const dx = g.rotated ? rawDy : rawDx;
-      const dy = g.rotated ? -rawDx : rawDy;
+      const dx = t.clientX - g.startX;
+      const dy = t.clientY - g.startY;
       if (g.longPressActive) {
         // 长按中移动只阻止页面滚动，不触发滑动
         e.preventDefault();
@@ -1394,9 +1337,9 @@ export function PlayerShell({
         g.mode = Math.abs(dx) > Math.abs(dy) ? 'swipe-h' : 'swipe-v';
       }
       if (g.mode === 'swipe-h') {
-        // 横向滑动：全幅 ≈ 60s，实时跟手 seek（旋转时以包围盒高为视频宽）
+        // 横向滑动：全幅 ≈ 60s，实时跟手 seek
         const rect = el?.getBoundingClientRect();
-        const width = (g.rotated ? rect?.height : rect?.width) || 400;
+        const width = rect?.width || 400;
         const delta = (dx / width) * 60;
         const duration = (player.duration() ?? 0);
         const target = Math.min(
@@ -1407,9 +1350,9 @@ export function PlayerShell({
         showHint(`${formatTime(target)} / ${formatTime(duration || 0)}`);
         e.preventDefault();
       } else if (g.mode === 'swipe-v') {
-        // 纵向滑动：右半屏=音量，左半屏=亮度；全幅 ≈ 全量程（旋转时以包围盒宽为视频高）
+        // 纵向滑动：右半屏=音量，左半屏=亮度；全幅 ≈ 全量程
         const rect = el?.getBoundingClientRect();
-        const height = (g.rotated ? rect?.width : rect?.height) || 300;
+        const height = rect?.height || 300;
         const ratio = -dy / height; // 上滑为正
         if (g.volumeSide) {
           const vol = Math.min(1, Math.max(0, g.startVolume + ratio));
@@ -1447,23 +1390,19 @@ export function PlayerShell({
       const now = Date.now();
       const rect = el?.getBoundingClientRect();
       const x = e.changedTouches[0]?.clientX ?? g.startX;
-      const y = e.changedTouches[0]?.clientY ?? g.startY;
-      // 旋转时沿视频宽度的位置改用视口 Y（包围盒高 = 视频宽）
-      const pos = g.rotated ? y - (rect?.top ?? 0) : x - (rect?.left ?? 0);
-      const span = g.rotated ? (rect?.height ?? 0) : (rect?.width ?? 0);
-      const lastPos = g.rotated ? g.lastTapY : g.lastTapX;
-      if (now - g.lastTapAt < 280 && Math.abs(pos - lastPos) < 80) {
+      if (now - g.lastTapAt < 280 && Math.abs(x - g.lastTapX) < 80) {
         // 双击
         if (g.singleTapTimer) { clearTimeout(g.singleTapTimer); g.singleTapTimer = null; }
         g.lastTapAt = 0;
         const duration = (player.duration() ?? 0);
-        const relX = span > 0 ? pos : span / 2;
-        if (span > 0 && relX >= span / 3 && relX <= (2 * span) / 3) {
+        const width = rect?.width ?? 0;
+        const relX = rect ? x - rect.left : width / 2;
+        if (width > 0 && relX >= width / 3 && relX <= (2 * width) / 3) {
           // 中间 1/3：播放/暂停
           if (player.paused()) { void player.play()?.catch(() => {}); showHint('播放'); }
           else { player.pause(); showHint('暂停'); }
         } else {
-          const isRight = span > 0 ? pos > span / 2 : true;
+          const isRight = rect ? x > rect.left + rect.width / 2 : true;
           const target = isRight
             ? Math.min((player.currentTime() ?? 0) + 10, Number.isFinite(duration) ? duration : Infinity)
             : Math.max(0, (player.currentTime() ?? 0) - 10);
@@ -1475,7 +1414,6 @@ export function PlayerShell({
         // 单击不切换播放/暂停（控制栏显隐由 Video.js 内置 tap 处理）。
         g.lastTapAt = now;
         g.lastTapX = x;
-        g.lastTapY = y;
         g.singleTapTimer = setTimeout(() => {
           g.singleTapTimer = null;
           g.lastTapAt = 0;
