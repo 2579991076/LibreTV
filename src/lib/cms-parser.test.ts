@@ -10,7 +10,6 @@ import {
   parseDetail,
   parseDetailPageHtml,
   parseSearchList,
-  resolvePlayPageUrl,
 } from './cms-parser';
 
 const source = { key: 'test', name: '测试源', url: 'https://api.example.com/provide/vod' };
@@ -30,13 +29,6 @@ describe('parseSearchList', () => {
       typeName: '科幻', year: '2019', remarks: 'HD', sourceUrl: source.url,
     });
     expect(items[1].vodId).toBe('abc-1');
-  });
-
-  it('解析演员与导演字段（ac=videolist 全字段下发）', () => {
-    const items = parseSearchList({
-      list: [{ vod_id: 1, vod_name: '大话西游', vod_actor: '周星驰,吴孟达', vod_director: '刘镇伟' }],
-    }, source);
-    expect(items[0]).toMatchObject({ actor: '周星驰,吴孟达', director: '刘镇伟' });
   });
 
   it('对缺失字段健壮', () => {
@@ -88,49 +80,6 @@ describe('extractEpisodesFromPlayUrl', () => {
 
   it('空输入返回空数组', () => {
     expect(extractEpisodesFromPlayUrl('')).toEqual([]);
-  });
-
-  it('整条都是播放页时补 /index.m3u8（光速/极速类源）', () => {
-    const play = '第01集$https://v.gsuus.com/play/egJJp33d#第02集$https://v.gsuus.com/play/ab12Cd';
-    expect(extractEpisodesFromPlayUrl(play)).toEqual([
-      'https://v.gsuus.com/play/egJJp33d/index.m3u8',
-      'https://v.gsuus.com/play/ab12Cd/index.m3u8',
-    ]);
-  });
-
-  it('已有 m3u8 直链的线路优先且不被改写', () => {
-    const play =
-      '第01集$https://v.gsuus.com/play/egJJp33d$$$第01集$https://cdn/x/index.m3u8';
-    expect(extractEpisodesFromPlayUrl(play)).toEqual(['https://cdn/x/index.m3u8']);
-  });
-});
-
-describe('resolvePlayPageUrl', () => {
-  it('直链（.m3u8/.mp4）原样返回', () => {
-    expect(resolvePlayPageUrl('https://cdn/x/index.m3u8')).toBe(
-      'https://cdn/x/index.m3u8'
-    );
-    expect(resolvePlayPageUrl('https://cdn/x/v.mp4')).toBe('https://cdn/x/v.mp4');
-  });
-
-  it('播放页补 /index.m3u8，末尾斜杠先去掉', () => {
-    expect(resolvePlayPageUrl('https://v.gsuus.com/play/egJJp33d')).toBe(
-      'https://v.gsuus.com/play/egJJp33d/index.m3u8'
-    );
-    expect(resolvePlayPageUrl('https://vv.jisuzyv.com/play/abc/')).toBe(
-      'https://vv.jisuzyv.com/play/abc/index.m3u8'
-    );
-  });
-
-  it('已是 /index.m3u8 不重复补', () => {
-    expect(resolvePlayPageUrl('https://v.gsuus.com/play/egJJp33d/index.m3u8')).toBe(
-      'https://v.gsuus.com/play/egJJp33d/index.m3u8'
-    );
-  });
-
-  it('非法 URL 原样返回', () => {
-    expect(resolvePlayPageUrl('not-a-url')).toBe('not-a-url');
-    expect(resolvePlayPageUrl('')).toBe('');
   });
 });
 
@@ -299,34 +248,5 @@ describe('filterRelevantResults', () => {
     expect(filterRelevantResults([
       { name: '10月17日 足球联赛' }, {}, { name: '' }, relevant,
     ], '赛博朋克：边缘行者 2')).toEqual([relevant]);
-  });
-
-  it('保留演员匹配：标题不含人名、但演员栏含人名的条目不再被丢弃', () => {
-    const items = [
-      { name: '大话西游', actor: '周星驰,吴孟达', director: '刘镇伟' },
-      { name: '无关电影', actor: '王五', director: '赵六' },
-    ];
-    expect(filterRelevantResults(items, '周星驰')).toEqual([items[0]]);
-  });
-
-  it('保留导演匹配', () => {
-    const items = [
-      { name: '大话西游', actor: '周星驰', director: '刘镇伟' },
-      { name: '无关电影', actor: '王五', director: '赵六' },
-    ];
-    expect(filterRelevantResults(items, '刘镇伟')).toEqual([items[0]]);
-  });
-
-  it('多词查询可分属不同字段：人名在演员栏、片名在标题栏', () => {
-    const items = [
-      { name: '大话西游', actor: '周星驰,吴孟达', director: '刘镇伟' },
-      { name: '大话西游', actor: '王五', director: '赵六' },
-    ];
-    expect(filterRelevantResults(items, '周星驰 大话西游')).toEqual([items[0]]);
-  });
-
-  it('演员/导演栏都不含关键词时仍丢弃', () => {
-    const items = [{ name: '大话西游', actor: '周星驰', director: '刘镇伟' }];
-    expect(filterRelevantResults(items, '成龙')).toEqual([]);
   });
 });

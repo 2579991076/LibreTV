@@ -40,11 +40,6 @@ export function parseSearchList(
       year: typeof vod.vod_year === 'string' ? vod.vod_year : undefined,
       area: typeof vod.vod_area === 'string' ? vod.vod_area : undefined,
       remarks: typeof vod.vod_remarks === 'string' ? vod.vod_remarks : undefined,
-      // ac=videolist 返回全字段：vod_actor / vod_director 随列表一起下发。
-      // 以前这里直接丢弃，导致搜索结果里没有任何演员/导演信息，
-      // 相关性过滤（只看标题）还会把上游返回的演员匹配结果当成无关条目丢掉。
-      actor: str(vod.vod_actor),
-      director: str(vod.vod_director),
       sourceUrl: source.url,
       isAdult: source.isAdult,
     };
@@ -55,8 +50,6 @@ export function parseSearchList(
  * 从 vod_play_url 中提取分集地址：格式 源1$$$源2，集1$URL1#集2$URL2。
  * 部分源（如量子 lziapi、非凡 ffzy）第一条线路是网页中转页（…/share/xxx，不可播），
  * 真实 m3u8 在后面的线路里，因此优先取包含 m3u8 直链的线路；均无 m3u8 时回退第一条。
- * 光速/极速等源给的整条都是播放页（…/play/xxxx，无视频后缀），真实 m3u8 在
- * 播放页地址后加 /index.m3u8，因此对无视频后缀的地址统一补 /index.m3u8。
  */
 export function extractEpisodesFromPlayUrl(playUrl: string): string[] {
   if (!playUrl) return [];
@@ -73,44 +66,7 @@ export function extractEpisodesFromPlayUrl(playUrl: string): string[] {
     )
     .filter((eps) => eps.length > 0);
   if (groups.length === 0) return [];
-  const picked =
-    groups.find((eps) => eps.some((url) => url.includes('.m3u8'))) ?? groups[0];
-  return picked.map(resolvePlayPageUrl);
-}
-
-const VIDEO_EXTS = [
-  '.m3u8',
-  '.mp4',
-  '.flv',
-  '.mkv',
-  '.avi',
-  '.mov',
-  '.webm',
-  '.ts',
-  '.m4s',
-  '.mpd',
-];
-
-/**
- * 把播放页地址解析为真实视频地址：已有视频后缀（.m3u8/.mp4 等）或代理地址原样返回；
- * 否则视为播放页（光速/极速类 …/play/xxxx），补 /index.m3u8。
- * 量子 share 链接已整体 404，补了也一样 404，不影响（播放器会换源）。
- */
-export function resolvePlayPageUrl(url: string): string {
-  if (!url) return url;
-  try {
-    const u = new URL(url);
-    const path = u.pathname.toLowerCase();
-    if (VIDEO_EXTS.some((ext) => path.endsWith(ext))) return url;
-    if (path.endsWith('/index.m3u8')) return url;
-    if (u.pathname.startsWith('/api/proxy')) return url;
-    u.pathname = u.pathname.replace(/\/+$/, '') + '/index.m3u8';
-    u.search = '';
-    u.hash = '';
-    return u.toString();
-  } catch {
-    return url;
-  }
+  return groups.find((eps) => eps.some((url) => url.includes('.m3u8'))) ?? groups[0];
 }
 
 /** 从简介文本中兜底提取 m3u8 链接 */
@@ -321,36 +277,9 @@ export function isRelevant(name: string, wd: string): boolean {
   return isRelevantPrepared(name, query);
 }
 
-/**
- * 按演员/导演匹配，是标题匹配之外的第二通道。
- *
- * 背景：上游 Apple CMS 提供接口（ac=videolist）只有一个搜索参数 `wd`，
- * 官方文档写明它“按 vod_name 模糊匹配”；但各资源站实现并不统一，
- * 有的站（或分词/OR 模糊搜索的站）会在 wd 命中演员时也返回条目。
- * 以前 filterRelevantResults 只看标题，这类条目会被当成无关结果丢掉。
- * 这里放行它们：只要查询的每个词都落在片名、演员、导演任一字段里就算相关，
- * 词可以分属不同字段（如「周星驰 大话西游」：人名在演员栏，片名在标题栏）。
- * 单个词的情形同样适用（如搜「周星驰」，演员栏含该名即命中）。
- */
-function matchesPersonFields(
-  item: { name?: string; actor?: string; director?: string },
-  query: PreparedQuery
-): boolean {
-  const fields = [item.name, item.actor, item.director].map((f) => normalizeTitle(f || ''));
-  return query.tokens.length > 0 && query.tokens.every((token) => fields.some((f) => includesKeyword(f, token)));
-}
-
-function isRelevantItem(
-  item: { name?: string; actor?: string; director?: string },
-  query: PreparedQuery
-): boolean {
-  if (isRelevantPrepared(item.name || '', query)) return true;
-  return matchesPersonFields(item, query);
-}
-
 /** 丢弃无关结果；即使全部不相关，也不能返回源站的原始目录。 */
-export function filterRelevantResults<T extends { name?: string; actor?: string; director?: string }>(items: T[], wd: string): T[] {
+export function filterRelevantResults<T extends { name?: string }>(items: T[], wd: string): T[] {
   const query = prepareQuery(wd);
   if (!query) return items;
-  return items.filter((item) => isRelevantItem(item, query));
+  return items.filter((item) => isRelevantPrepared(item.name || '', query));
 }
