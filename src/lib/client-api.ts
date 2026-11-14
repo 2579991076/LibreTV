@@ -229,7 +229,7 @@ export const api = {
       body: JSON.stringify({ url }),
     }),
 
-  /** 拉取远程数据源订阅（自动识别 LibreTV-SourceList JSON 与 TVBOX 配置 JSON） */
+  /** 拉取远程数据源订阅（自动识别 源源の放映室-SourceList JSON 与 TVBOX 配置 JSON） */
   fetchSourceList: (url: string) => {
     const sp = new URLSearchParams({ url });
     return request<SourceListPayload>(`/api/source-list?${sp.toString()}`);
@@ -337,15 +337,24 @@ async function searchStream(
     throwForAuthStatus(res);
     if (!res.ok || !res.body) throw new ApiError(`请求失败 (${res.status})`, res.status);
 
-    // done 事件缺失（流被截断）时退化为空结果，不让整次搜索报错
+    // done 事件是流完整结束的唯一凭证：没收到它，说明服务端崩了或网关截断了流，
+    // 此时已收到的 source 事件只是部分结果。绝不能退化为空结果返回——首页会把
+    // “部分结果丢失”渲染成“没有找到匹配的结果”，误导用户以为真的搜不到。
+    // 抛错后 React Query 进入 error 状态，首页按错误展示（同 qualityProbeStream 的做法）。
+    // 用户主动取消（AbortError）时 consumeNdjson 直接抛错，不会走到这里。
     let final: SearchResponse = { list: [], failures: [] };
+    let doneReceived = false;
     await consumeNdjson<SearchStreamEvent>(res, (event) => {
       if (event.type === 'source') {
         onSource(event);
       } else if (event.type === 'done') {
         final = { list: event.list, failures: event.failures };
+        doneReceived = true;
       }
     });
+    if (!doneReceived) {
+      throw new ApiError('搜索连接中途被断开（未收到完整结果），请重试', 0);
+    }
     return final;
   }
 

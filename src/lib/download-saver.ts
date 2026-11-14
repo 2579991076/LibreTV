@@ -39,12 +39,20 @@ function memoryTarget(filename: string, confirmOverBytes = 500 * 1024 * 1024): S
     done = true;
     const blob = new Blob(chunks.map((c) => c.buffer as ArrayBuffer));
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    // iOS Safari 会忽略 a.download，直接导航到 blob 而丢失页面状态：改用新标签打开
+    const isIOS =
+      /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (isIOS) {
+      window.open(url, '_blank');
+    } else {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
     setTimeout(() => URL.revokeObjectURL(url), 30_000);
   };
   return {

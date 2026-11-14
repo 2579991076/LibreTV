@@ -200,11 +200,23 @@ async function runStreamingJob(ctx: {
   // MP4 转封装同样是流式的：push 一片立刻产出 fMP4 片段写出，无需聚合整集
   const transmuxer =
     format === 'MP4' ? new StreamingTransmuxer(target, { durationSeconds: parsed.totalDuration }) : undefined;
+  // 中止时丢弃未写完的残文件：FS 目标 abort() 会删除已写出的部分内容，
+  // 内存目标 abort() 清空已聚合的分片、不触发浏览器下载
+  const abortTarget = async () => {
+    if (transmuxer) await transmuxer.abort();
+    else await target.abort();
+  };
   for (let i = 1; i <= total; i++) {
-    if (signal.aborted) return;
+    if (signal.aborted) {
+      await abortTarget();
+      return;
+    }
     await pause.waitIfPaused();
     const buffer = await fetchSegmentWithRetry(parsed.segments[i - 1].url, i, signal);
-    if (!buffer) return;
+    if (!buffer) {
+      await abortTarget();
+      return;
+    }
     let data: ArrayBuffer = buffer;
     if (aesKey && parsed.aesConf) {
       data = await decryptSegment(buffer, aesKey, parsed.aesConf.iv, parsed.mediaSequence, i - 1);
@@ -308,10 +320,16 @@ export async function runDownloadJob(opts: DownloadJobOptions): Promise<void> {
   const cache = await caches.open(DL_CACHE_NAME);
   const chunkKey = (index: number) => dlChunkKey(taskId, index);
   let cursor = 0;
-  // 恢复：统计已有分片数作为起点
+  // 恢复：统计已有分片数作为起点（一次 cache.keys() + Set 查表；
+  // 旧版逐分片串行 cache.match，千级分片续传要卡数秒）
+  const keys = await cache.keys();
+  const chunkPrefix = `${DL_CHUNK_ORIGIN}/${encodeURIComponent(taskId)}/`;
+  const cachedIndexes = new Set(
+    keys.filter((r) => r.url.startsWith(chunkPrefix)).map((r) => Number(r.url.slice(chunkPrefix.length)))
+  );
   let current = 0;
   for (let i = 1; i <= total; i++) {
-    if (await cache.match(new Request(chunkKey(i)))) current += 1;
+    if (cachedIndexes.has(i)) current += 1;
   }
   report(current, total, 'downloading');
 
@@ -351,7 +369,11 @@ export async function runDownloadJob(opts: DownloadJobOptions): Promise<void> {
     hardStop.abort();
     throw err;
   }
-  if (jobSignal.aborted) return;
+  if (jobSignal.aborted) {
+    // 写出尚未开始，目标还是空文件：照样 abort，避免残留空文件
+    await target.abort();
+    return;
+  }
 
   // —— 顺序写出（转封装 / 拼接） ——
   report(total, total, 'processing');
@@ -360,7 +382,11 @@ export async function runDownloadJob(opts: DownloadJobOptions): Promise<void> {
     // → 播放器显示 13:15:21），必须在写出 initSegment 前回填真实值
     const transmuxer = new StreamingTransmuxer(target, { durationSeconds: parsed.totalDuration });
     for (let i = 1; i <= total; i++) {
-      if (jobSignal.aborted) return;
+      if (jobSignal.aborted) {
+        // 中止时丢弃未写完的残文件：transmuxer.abort() 会 abort 底层写入流
+        await transmuxer.abort();
+        return;
+      }
       await pause.waitIfPaused();
       const resp = await cache.match(new Request(chunkKey(i)));
       if (!resp) throw new Error(`分片 ${i} 缓存丢失，请重试`);
@@ -373,7 +399,11 @@ export async function runDownloadJob(opts: DownloadJobOptions): Promise<void> {
     await transmuxer.finish();
   } else {
     for (let i = 1; i <= total; i++) {
-      if (jobSignal.aborted) return;
+      if (jobSignal.aborted) {
+        // 中止时丢弃未写完的残文件
+        await target.abort();
+        return;
+      }
       await pause.waitIfPaused();
       const resp = await cache.match(new Request(chunkKey(i)));
       if (!resp) throw new Error(`分片 ${i} 缓存丢失，请重试`);

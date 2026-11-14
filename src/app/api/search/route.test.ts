@@ -89,6 +89,30 @@ describe('POST /api/search', () => {
     expect(data.list[0]?.name).toBe('测试剧');
   });
 
+  it('按演员/导演搜索：上游返回的人名匹配不再被丢弃，演员/导演字段随结果返回', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(cmsList([
+      { vod_id: 1, vod_name: '大话西游', vod_actor: '周星驰,吴孟达', vod_director: '刘镇伟' },
+      { vod_id: 2, vod_name: '周星驰传', vod_actor: '张三', vod_director: '李四' },
+      { vod_id: 3, vod_name: '无关电影', vod_actor: '王五', vod_director: '赵六' },
+    ]))));
+    const actorSource = [{ key: 'a', name: '源A', url: 'https://cms-actor.example.com/api.php' }];
+    const res = await POST(makeRequest({ wd: '周星驰', sources: actorSource, filterAdult: true }));
+    const data = (await res.json()) as {
+      list: Array<{ vodId: string; name: string; actor?: string; director?: string }>;
+      failures: unknown[];
+    };
+    // 标题含人名的「周星驰传」排前面，纯演员匹配的「大话西游」在后；无关的丢掉
+    expect(data.list.map((i) => i.vodId)).toEqual(['2', '1']);
+    expect(data.list[1]).toMatchObject({ actor: '周星驰,吴孟达', director: '刘镇伟' });
+    expect(data.failures).toEqual([]);
+
+    // 换导演名搜：同一批上游条目里只有导演栏含「刘镇伟」的那条能命中
+    const directorSource = [{ key: 'a', name: '源A', url: 'https://cms-actor.example.com/api.php/director' }];
+    const res2 = await POST(makeRequest({ wd: '刘镇伟', sources: directorSource, filterAdult: true }));
+    const data2 = (await res2.json()) as { list: Array<{ vodId: string }> };
+    expect(data2.list.map((i) => i.vodId)).toEqual(['1']);
+  });
+
   it('内网字面量地址在发起请求前被 SSRF 校验拒绝', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);

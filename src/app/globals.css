@@ -4,7 +4,7 @@
 
 /*
  * 语义化配色（RGB 三元组，供 Tailwind 以 <alpha-value> 注入透明度）：
- * 深色主题沿用旧版 LibreTV 配色；浅色主题为对应的白底变体。
+ * 深色主题沿用旧版配色；浅色主题为对应的白底变体。
  */
 :root {
   --c-page: 246 247 249;           /* #f6f7f9 */
@@ -36,7 +36,7 @@
 }
 
 .dark {
-  /* 旧版 LibreTV（backup-2025）赛博影视主题（整体调深一档）：深蓝黑底 + 霓虹蓝/粉点缀 */
+  /* 旧版（backup-2025）赛博影视主题（整体调深一档）：深蓝黑底 + 霓虹蓝/粉点缀 */
   --c-page: 11 16 26;              /* #0b101a 深蓝黑页面底色 */
   --c-surface: 20 28 41;           /* #141c29 弹窗/抽屉底色 */
   --c-surface-raised: 20 28 41;
@@ -133,7 +133,7 @@ body {
   color: rgb(var(--c-on-accent)) !important;
 }
 
-/* 品牌渐变字（沿用旧版 LibreTV 的霓虹蓝→霓虹粉） */
+/* 品牌渐变字（沿用旧版的霓虹蓝→霓虹粉） */
 .brand-gradient {
   background: linear-gradient(to right, #00ccff, #ff3c78);
   -webkit-background-clip: text;
@@ -186,50 +186,59 @@ body {
 }
 
 /*
- * 播放器控制条在窄屏没有多余横向空间：
- * 上/下集控件会把右侧的「网页全屏」「全屏」挤出可视区（手机上表现为图标显示不全）。
- * 只在窄于 640px 时收起这两个控件——手机横屏、平板仍有空间，可以保留。
- * 切集在任何情况下都还能用播放器下方的按钮。
+ * Video.js 播放器主题（源源の放映室，品牌蓝 #2563eb）。
+ * 旧版 ArtPlayer 的 .art-control-* 窄屏收起规则与 .libretv-rotate-landscape
+ * 旋转 hack 已随播放器替换一并删除：全屏改走 Video.js 原生全屏，
+ * 不再用 fullscreenWeb + CSS 旋转 90°。
  */
-@media (max-width: 640px) {
-  /* 竖屏空间只够放「播放 + 时间 + 设置 + 网页全屏 + 全屏」：
-     音量交给系统按键，截图与画中画在手机上很少用，一并收起，
-     保证最右侧的全屏按钮完整可见 */
-  .art-control-prev-episode,
-  .art-control-next-episode,
-  .art-control-volume,
-  .art-control-screenshot,
-  .art-control-pip {
-    display: none !important;
-  }
-
-  /* 00:04 / 01:26:30 这种长文本占宽最多，缩字号再收紧内边距 */
-  .art-control-time {
-    font-size: 11px;
-    padding: 0 2px;
-  }
-
-  /* 默认每个图标 46px，竖屏下收到 40px —— 省出的宽度正好让最后一个全屏按钮不贴边 */
-  .art-control-playAndPause,
-  .art-control-setting,
-  .art-control-fullscreenWeb,
-  .art-control-fullscreen {
-    width: 40px !important;
-    min-width: 40px !important;
-  }
+/* 主题色：进度已播部分、音量条、加载圈 */
+.libretv-videojs .vjs-play-progress,
+.libretv-videojs .vjs-volume-level {
+  background-color: #2563eb;
+}
+.libretv-videojs .vjs-play-progress::before {
+  background-color: #2563eb;
+}
+/* 画质菜单按钮：文字按钮（自动 / 1080p），与图标按钮同高 */
+.libretv-videojs .vjs-quality-menu-button .vjs-icon-placeholder {
+  font-size: 12px;
+  font-weight: 600;
+}
+/* 画质菜单弹出层：与站内深色面板一致 */
+.libretv-videojs .vjs-quality-menu-button .vjs-menu {
+  background-color: rgba(0, 0, 0, 0.85);
+}
+.libretv-videojs .vjs-quality-menu-button .vjs-menu-item {
+  color: #fff;
+}
+.libretv-videojs .vjs-quality-menu-button .vjs-menu-item.vjs-selected {
+  color: #60a5fa;
+}
+/* 底部细进度条（miniProgressBar）由 player-shell.tsx 直接控制显隐，
+   这里只保证它盖在控制栏之下、不拦截触摸 */
+.libretv-videojs .vjs-control-bar {
+  z-index: 2;
 }
 
 /*
- * 竖屏下点「网页全屏」时横屏放大：iOS Safari 不支持 screen.orientation.lock，
- * 改用 CSS 把播放器旋转 90° 放满屏。只在竖屏生效，横屏时不旋转；
- * 退出网页全屏（类名被摘掉）时自动复原。
+ * 窄屏（<640px）控制条空间不足：收起音量、截图、画中画三个次常用控件，
+ * 保证播放、上下集、时间、倍速、画质、全屏完整可见。
+ * 音量交给系统按键；切集在任何情况下都还能用播放器下方的按钮。
  */
-@media (orientation: portrait) {
-  .libretv-rotate-landscape {
-    width: 100vh !important;
-    height: 100vw !important;
-    top: 50% !important;
-    left: 50% !important;
-    transform: translate(-50%, -50%) rotate(90deg) !important;
+@media (max-width: 640px) {
+  .libretv-videojs .vjs-volume-panel,
+  .libretv-videojs .vjs-picture-in-picture-control {
+    display: none !important;
+  }
+  /* 截图按钮是自定义按钮（无内置类名），用 controlText 定位 */
+  .libretv-videojs .vjs-control-bar .vjs-button[aria-label="截图"],
+  .libretv-videojs .vjs-control-bar .vjs-button[title="截图"] {
+    display: none !important;
+  }
+  /* 时间文本占宽最多，缩字号再收紧内边距 */
+  .libretv-videojs .vjs-time-control {
+    font-size: 11px;
+    padding-left: 2px;
+    padding-right: 2px;
   }
 }

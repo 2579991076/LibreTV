@@ -94,10 +94,15 @@ export async function handleProxyRequest(req: Request, targetUrl: string): Promi
   let lastError: unknown = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const result = await fetchWithSafeRedirects(targetUrl, {
-        headers,
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
+      // 仅对响应头等待限时（headerTimeoutMs）：AbortSignal.timeout 会在
+      // body 流式传输时继续计时，慢分片（>8s）会被中途截断返回残缺内容。
+      // 与直播路由 handleLiveStreamRequest 同一做法——拿到响应头即清计时器，
+      // body 不再受限，由客户端断开 / 上游结束自然终止。
+      const result = await fetchWithSafeRedirects(
+        targetUrl,
+        { headers },
+        { headerTimeoutMs: TIMEOUT_MS }
+      );
       response = result.res;
       finalUrl = result.finalUrl;
       lastError = null;

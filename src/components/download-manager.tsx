@@ -13,7 +13,7 @@ import {
   type DownloadProgress,
 } from '@/lib/m3u8-downloader';
 import { loadDownloadSettings, saveDownloadSettings } from '@/lib/download-settings';
-import { detectSavingCapability, pickSaveTarget } from '@/lib/download-saver';
+import { detectSavingCapability, pickSaveTarget, type SaveTarget } from '@/lib/download-saver';
 import { Switch } from './settings-shared';
 
 /**
@@ -52,6 +52,12 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
   const [chunkCache, setChunkCache] = useState(true);
   const [proxy, setProxy] = useState(false);
   const running = useRef(new Map<string, RunningHandle>());
+  /**
+   * 已选好的保存目标（FS Access 句柄 / 内存聚合），按任务 id 分槽存放。
+   * 旧版单槽 __dlSaveTarget 只能存一个任务：第二个任务入队会覆盖第一个的
+   * 目标。目标活不过页面刷新，刷新恢复的任务须由用户点「继续」重选。
+   */
+  const targets = useRef(new Map<string, SaveTarget>());
 
   const refresh = useCallback(() => {
     void db.downloads.orderBy('createdAt').reverse().toArray().then(setTasks);
@@ -66,7 +72,15 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
   // 若只在打开抽屉时才读，关闭状态下加入的任务会漏掉用户的中转偏好
   useEffect(() => {
     setProxy(loadDownloadSettings().proxy);
-  }, []);
+    // 刷新中断的任务：上次页面关闭时正在下载的行没有运行中句柄，
+    // 留在 downloading 会被调度器永远跳过（只启动 waiting）且「暂停」按钮无响应。
+    // 复位为 waiting，等用户点「继续」重选目标后恢复（断点分片仍在缓存里）。
+    // status 未建索引，用 filter 全表扫描（任务表很小）。
+    void db.downloads
+      .filter((t) => t.status === 'downloading')
+      .modify({ status: 'waiting', updatedAt: Date.now() })
+      .then(() => refresh());
+  }, [refresh]);
 
   // —— 任务启动：选目标 → runDownloadJob ——
   const startTask = useCallback(
@@ -103,22 +117,25 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
         proxy,
         onProgress,
         // hasTarget=false（刷新恢复/排队恢复）时目标已在手势内由「继续」按钮选好
-        target: (globalThis as unknown as { __dlSaveTarget?: { id: string; target: import('@/lib/download-saver').SaveTarget } }).__dlSaveTarget?.id === entry.id
-          ? (globalThis as unknown as { __dlSaveTarget: { target: import('@/lib/download-saver').SaveTarget } }).__dlSaveTarget.target
-          : {
-              // 目标已失效（页面刷新后句柄消亡）：显式报错引导用户点「继续」重选，
-              // 绝不能静默空写——否则任务会显示完成却产出空文件
-              kind: 'memory',
-              write: async () => {
-                throw new Error('保存位置已失效，请点击「继续」重新选择');
-              },
-              close: async () => {},
-              abort: async () => {},
+        target:
+          targets.current.get(entry.id) ??
+          {
+            // 目标已失效（页面刷新后句柄消亡）：显式报错引导用户点「继续」重选，
+            // 绝不能静默空写——否则任务会显示完成却产出空文件
+            kind: 'memory',
+            write: async () => {
+              throw new Error('保存位置已失效，请点击「继续」重新选择');
             },
+            close: async () => {},
+            abort: async () => {},
+          },
       });
 
       void job
         .then(async () => {
+          // runDownloadJob 在中止时正常 resolve：用户取消不是完成，
+          // 不写完成状态、不弹「下载完成」、也不清空断点缓存
+          if (abort.signal.aborted) return;
           await updateEntry(entry.id, { status: 'completed' });
           void clearDownloadChunks(entry.id);
           toast(`《${entry.title}》下载完成`, 'success');
@@ -130,6 +147,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
         })
         .finally(() => {
           running.current.delete(entry.id);
+          targets.current.delete(entry.id);
           scheduleNext();
         });
     },
@@ -144,14 +162,13 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
       const runningCount = running.current.size;
       if (runningCount >= MAX_CONCURRENT_DOWNLOADS) return;
       const all = await db.downloads.orderBy('createdAt').toArray();
-      const waiting = all.filter((t) => t.status === 'waiting' && !running.current.has(t.id));
+      // 无保存目标的排队任务不自动启动：目标活不过页面刷新，
+      // 无目标启动只会白下整集、到写出时才报「保存位置已失效」。
+      // 等用户点「继续」在手势内重选目标后再由调度器启动。
+      const waiting = all.filter((t) => t.status === 'waiting' && !running.current.has(t.id) && targets.current.has(t.id));
       for (const t of waiting.slice(0, MAX_CONCURRENT_DOWNLOADS - runningCount)) {
         const entry = t;
-        // 队列恢复的任务没有保存目标：以内存目标启动（分片已在本地，写出快）
-        void startTask(
-          { ...entry, format: entry.format },
-          (globalThis as { __dlSaveTarget?: { id: string } }).__dlSaveTarget?.id === entry.id
-        );
+        void startTask({ ...entry, format: entry.format }, true);
       }
     })();
   }, [startTask]);
@@ -187,10 +204,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
         // 用户手势内预选保存目标（FS Access 弹窗必须在手势内）
         try {
           const target = await pickSaveTarget(`${detail.title}.${format.toLowerCase()}`);
-          (globalThis as unknown as { __dlSaveTarget?: { id: string; target: import('@/lib/download-saver').SaveTarget } }).__dlSaveTarget = {
-            id,
-            target,
-          };
+          targets.current.set(id, target);
         } catch (err) {
           if (err instanceof Error && err.message.includes('取消')) {
             toast('已取消下载', 'info');
@@ -237,14 +251,19 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
       await updateEntry(entry.id, { status: 'paused' });
       return;
     }
+    if (entry.status === 'paused' && handle) {
+      // 句柄仍在运行中（本次会话内暂停）：直接恢复暂停控制器，
+      // 不重选保存目标——旧版先重选再判 running.has(id) 直接 return，
+      // pause.resume() 永远走不到，「继续」按钮是死的
+      handle.pause.resume();
+      await updateEntry(entry.id, { status: 'downloading' });
+      return;
+    }
     if (entry.status === 'paused' || entry.status === 'waiting' || entry.status === 'error') {
-      // 恢复：需要用户手势内重选保存目标（浏览器限制）
+      // 无运行中句柄的恢复（刷新后）：需要用户手势内重选保存目标（浏览器限制）
       try {
         const target = await pickSaveTarget(`${entry.title}.${entry.format.toLowerCase()}`);
-        (globalThis as unknown as { __dlSaveTarget?: { id: string; target: import('@/lib/download-saver').SaveTarget } }).__dlSaveTarget = {
-          id: entry.id,
-          target,
-        };
+        targets.current.set(entry.id, target);
         if (running.current.has(entry.id)) return;
         await updateEntry(entry.id, { status: 'waiting' });
         scheduleNext();

@@ -206,7 +206,12 @@ export async function clearLiveProbeResultsDb(): Promise<void> {
   await db.liveProbe.clear();
 }
 
-// —— 配置导入导出（兼容旧版 LibreTV-Settings JSON 结构的导出格式） ——
+// —— 配置导入导出（导出名为「源源の放映室-Settings」；导入时也接受旧版导出的同名文件） ——
+
+/** 当前导出的配置文件名 */
+export const SETTINGS_EXPORT_NAME = '源源の放映室-Settings';
+/** 旧版导出的配置文件名：仅用于导入兼容，不再作为导出名 */
+export const LEGACY_SETTINGS_EXPORT_NAME = 'LibreTV-Settings';
 
 export async function exportConfig(): Promise<string> {
   // 导出前 flush：把节流缓冲中的最新设置落盘，避免导出的是 800ms 前的旧快照
@@ -220,7 +225,7 @@ export async function exportConfig(): Promise<string> {
   if (settings) data[PERSIST_KEY] = settings;
 
   return JSON.stringify({
-    name: 'LibreTV-Settings',
+    name: SETTINGS_EXPORT_NAME,
     time: Date.now().toString(),
     cfgVer: '2.0.0',
     data,
@@ -232,7 +237,8 @@ export async function importConfig(content: string): Promise<void> {
     name?: string;
     data?: Record<string, string>;
   };
-  if (config.name !== 'LibreTV-Settings') throw new Error('配置文件格式不正确');
+  if (config.name !== SETTINGS_EXPORT_NAME && config.name !== LEGACY_SETTINGS_EXPORT_NAME)
+    throw new Error('配置文件格式不正确');
   const data = config.data || {};
 
   if (typeof data[PERSIST_KEY] === 'string') {

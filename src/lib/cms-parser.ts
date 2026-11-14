@@ -40,6 +40,11 @@ export function parseSearchList(
       year: typeof vod.vod_year === 'string' ? vod.vod_year : undefined,
       area: typeof vod.vod_area === 'string' ? vod.vod_area : undefined,
       remarks: typeof vod.vod_remarks === 'string' ? vod.vod_remarks : undefined,
+      // ac=videolist 返回全字段：vod_actor / vod_director 随列表一起下发。
+      // 以前这里直接丢弃，导致搜索结果里没有任何演员/导演信息，
+      // 相关性过滤（只看标题）还会把上游返回的演员匹配结果当成无关条目丢掉。
+      actor: str(vod.vod_actor),
+      director: str(vod.vod_director),
       sourceUrl: source.url,
       isAdult: source.isAdult,
     };
@@ -277,9 +282,36 @@ export function isRelevant(name: string, wd: string): boolean {
   return isRelevantPrepared(name, query);
 }
 
+/**
+ * 按演员/导演匹配，是标题匹配之外的第二通道。
+ *
+ * 背景：上游 Apple CMS 提供接口（ac=videolist）只有一个搜索参数 `wd`，
+ * 官方文档写明它“按 vod_name 模糊匹配”；但各资源站实现并不统一，
+ * 有的站（或分词/OR 模糊搜索的站）会在 wd 命中演员时也返回条目。
+ * 以前 filterRelevantResults 只看标题，这类条目会被当成无关结果丢掉。
+ * 这里放行它们：只要查询的每个词都落在片名、演员、导演任一字段里就算相关，
+ * 词可以分属不同字段（如「周星驰 大话西游」：人名在演员栏，片名在标题栏）。
+ * 单个词的情形同样适用（如搜「周星驰」，演员栏含该名即命中）。
+ */
+function matchesPersonFields(
+  item: { name?: string; actor?: string; director?: string },
+  query: PreparedQuery
+): boolean {
+  const fields = [item.name, item.actor, item.director].map((f) => normalizeTitle(f || ''));
+  return query.tokens.length > 0 && query.tokens.every((token) => fields.some((f) => includesKeyword(f, token)));
+}
+
+function isRelevantItem(
+  item: { name?: string; actor?: string; director?: string },
+  query: PreparedQuery
+): boolean {
+  if (isRelevantPrepared(item.name || '', query)) return true;
+  return matchesPersonFields(item, query);
+}
+
 /** 丢弃无关结果；即使全部不相关，也不能返回源站的原始目录。 */
-export function filterRelevantResults<T extends { name?: string }>(items: T[], wd: string): T[] {
+export function filterRelevantResults<T extends { name?: string; actor?: string; director?: string }>(items: T[], wd: string): T[] {
   const query = prepareQuery(wd);
   if (!query) return items;
-  return items.filter((item) => isRelevantPrepared(item.name || '', query));
+  return items.filter((item) => isRelevantItem(item, query));
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { guardRequest } from '@/lib/api-guard';
-import { cmsRequestHeaders, filterAdultResults, filterRelevantResults, normalizeTitle, parseSearchList } from '@/lib/cms-parser';
+import { cmsRequestHeaders, filterAdultResults, filterRelevantResults, isRelevant, normalizeTitle, parseSearchList } from '@/lib/cms-parser';
 import { fetchUpstream, getCache, setCache } from '@/lib/fetch-utils';
 import { checkUpstreamAllowed } from '@/lib/ssrf';
 import type { SearchResponse, SearchStreamEvent, SourceConfig, SourceSearchOutcome } from '@/lib/types';
@@ -165,11 +165,22 @@ function aggregateOutcomes(outcomes: SourceSearchOutcome[], wd: string, filterAd
   list = filterRelevantResults(list, wd);
 
   // 精确命中（忽略标点差异）排在最前，其余按名称（与旧版一致），名称相同按源名
+  // 匹配分层：0 精确标题 → 1 标题相关 → 2 仅演员/导演相关（标题不含关键词）。
+  // 搜人名时，片名恰好含该人名的条目仍排前面，纯演员匹配排后面；搜片名时全是 0/1，
+  // 与旧版顺序完全一致。分层每条只算一次，不进比较器反复算。
   const exact = normalizeTitle(wd);
+  const tier = new Map<string, number>();
+  for (const item of list) {
+    const key = `${item.sourceKey}_${item.vodId}`;
+    tier.set(
+      key,
+      normalizeTitle(item.name || '') === exact ? 0 : isRelevant(item.name || '', wd) ? 1 : 2
+    );
+  }
   list.sort((a, b) => {
-    const aExact = normalizeTitle(a.name || '') === exact ? 0 : 1;
-    const bExact = normalizeTitle(b.name || '') === exact ? 0 : 1;
-    if (aExact !== bExact) return aExact - bExact;
+    const tierCompare =
+      (tier.get(`${a.sourceKey}_${a.vodId}`) ?? 2) - (tier.get(`${b.sourceKey}_${b.vodId}`) ?? 2);
+    if (tierCompare !== 0) return tierCompare;
     // 干净源（无广告/少广告）优先：光速、极速、如意排在其他源前面
     const CLEAN_SOURCES = ['光速', '极速', '如意'];
     const aClean = CLEAN_SOURCES.some((name) => (a.sourceName || '').includes(name));

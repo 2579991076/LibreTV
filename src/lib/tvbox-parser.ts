@@ -10,7 +10,7 @@ import {
 
 /**
  * TVBOX 配置 JSON 的解析层：把 `sites` / `lives` 归一化为本站的 SourceListPayload，
- * 使同一份订阅入口同时兼容 LibreTV-SourceList、TVBOX 配置与接口目录三种格式。
+ * 使同一份订阅入口同时兼容 源源の放映室-SourceList、TVBOX 配置与接口目录三种格式。
  *
  * 仅导入「直连类」条目（与本站现有能力对齐）：
  * - 点播：type=1 的 JSON 接口（即 Apple CMS 采集站）；部分共享配置省略 type 或写成 0，
@@ -74,7 +74,7 @@ interface SkipCounter {
   samples: string[];
 }
 
-/** 空统计（LibreTV-SourceList 格式的默认值） */
+/** 空统计（源源の放映室-SourceList 格式的默认值） */
 function emptyStats(format: SubscriptionParseStats['format']): SubscriptionParseStats {
   return { format, skipped: 0, skippedByReason: {}, truncated: 0 };
 }
@@ -213,7 +213,7 @@ export function isTvboxPayload(json: unknown): boolean {
   return Array.isArray(record.sites) || Array.isArray(record.lives);
 }
 
-/** 接口目录条目：裸数组里带 baseUrl 的对象（与 LibreTV 裸数组的 url 字段区分） */
+/** 接口目录条目：裸数组里带 baseUrl 的对象（与源列表裸数组的 url 字段区分） */
 function isCatalogEntry(entry: unknown): boolean {
   return !!entry && typeof entry === 'object' && !Array.isArray(entry) && 'baseUrl' in (entry as Record<string, unknown>);
 }
@@ -229,12 +229,12 @@ function isMixedCatalogPayload(json: unknown): boolean {
 }
 
 /**
- * 解析订阅 JSON：自动识别格式（TVBOX → 接口目录 → LibreTV-SourceList）。
+ * 解析订阅 JSON：自动识别格式（TVBOX → 接口目录 → 源源の放映室-SourceList）。
  * 三者均不匹配时由 parseSourceListPayload 抛出格式错误。
  *
- * 接口目录与 LibreTV 裸数组同为顶层数组，靠条目字段区分：
+ * 接口目录与源列表裸数组同为顶层数组，靠条目字段区分：
  * 全部条目带 baseUrl 才按目录处理，**混用两种字段时直接报错**。
- * 否则「一条带 baseUrl」会让其余 url 条目被静默丢弃，回退到 LibreTV 解析也救不了
+ * 否则「一条带 baseUrl」会让其余 url 条目被静默丢弃，回退到源列表解析也救不了
  * （那边读 url，丢的是 baseUrl 那批），两种都是无声的数据损失。
  */
 export function parseSubscriptionPayload(json: unknown): SourceListPayload {
@@ -242,7 +242,7 @@ export function parseSubscriptionPayload(json: unknown): SourceListPayload {
   if (isSourceCatalogPayload(json)) return parseSourceCatalogPayload(json);
   if (isMixedCatalogPayload(json)) {
     throw new Error(
-      '订阅内容混用了 baseUrl 与 url 两种条目，请统一为一种格式（接口目录用 baseUrl，LibreTV 源列表用 url）'
+      '订阅内容混用了 baseUrl 与 url 两种条目，请统一为一种格式（接口目录用 baseUrl，源列表用 url）'
     );
   }
   return { ...parseSourceListPayload(json), stats: emptyStats('libretv') };
@@ -426,7 +426,7 @@ function collectVodSources(rawSites: unknown[], skipped: SkipCounter) {
       markSkipped(skipped, 'invalidUrl', name);
       continue;
     }
-    if (seen.has(url)) continue; // 重复条目静默跳过，与 LibreTV 订阅语义一致
+    if (seen.has(url)) continue; // 重复条目静默跳过，与源列表订阅语义一致
     if (sources.length >= MAX_VOD_SOURCES) {
       truncated += 1;
       continue;

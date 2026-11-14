@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/header';
 import { RecommendSection } from '@/components/douban-section';
 import { DetailModal } from '@/components/detail-modal';
+import { ContinueWatching } from '@/components/continue-watching';
 import { AggregatedCard, aggregateResults } from '@/components/video-card';
 import { useAppStore, resolveSource, isInDisabledSubscription, isSourceDisabled } from '@/lib/store';
 import { api } from '@/lib/client-api';
@@ -13,7 +14,7 @@ import type { SearchResultItem, SourceSearchOutcome } from '@/lib/types';
 import { SearchHistoryDropdown, useSearchHistory } from '@/components/search-history';
 import { cn, formatDisableTtl, validateSourceUrl } from '@/lib/utils';
 import { useToast } from '@/components/toast';
-import { EmptyState } from '@/components/states';
+import { EmptyState, ErrorState } from '@/components/states';
 import { Icon } from '@/components/icon';
 import { SiteFooter } from '@/components/site-footer';
 
@@ -159,16 +160,21 @@ function HomeContent() {
   // 跨源同名聚合：同名影片合并为一张卡片，展开后可选择具体来源
   const groups = useMemo(() => aggregateResults(list), [list]);
 
-  // 分批渲染：新一次搜索（groups 变化）时重置回首批
+  // 分批渲染：只有新一次搜索（?s= 变化）时重置回首批；
+  // 流式搜索逐源到达会重建 groups 数组，绝不能跟着重置，
+  // 否则用户中途点了「加载更多」会被打回 60 张
   const [visibleCount, setVisibleCount] = useState(RESULT_PAGE_SIZE);
   const visibleGroups = useMemo(() => groups.slice(0, visibleCount), [groups, visibleCount]);
-  useEffect(() => setVisibleCount(RESULT_PAGE_SIZE), [groups]);
+  useEffect(() => setVisibleCount(RESULT_PAGE_SIZE), [urlQuery]);
 
   return (
     <div className="min-h-screen flex flex-col">
       <Header />
 
       <main className="relative flex-1 max-w-6xl w-full mx-auto px-4 py-6">
+        {/* 继续观看：首页最顶部，无历史时不渲染 */}
+        <ContinueWatching />
+
         {/* 首屏氛围渐变 */}
         {!urlQuery && (
           <div
@@ -217,7 +223,7 @@ function HomeContent() {
                 <input
                   ref={inputRef}
                   className="flex-1 min-w-0 pr-2 bg-transparent text-sm text-content placeholder:text-faint focus:outline-none"
-                  placeholder="输入影片名称..."
+                  placeholder="搜片名、演员或导演"
                   value={input}
                   maxLength={100}
                   onChange={(e) => {
@@ -370,6 +376,14 @@ function HomeContent() {
               </>
             ) : isSearching ? (
               <ResultsSkeleton />
+            ) : searchQuery.isError ? (
+              <ErrorState
+                message={
+                  searchQuery.error instanceof Error ? searchQuery.error.message : '搜索失败，请重试'
+                }
+                onRetry={() => searchQuery.refetch()}
+                className="!py-16"
+              />
             ) : (
               <EmptyState
                 icon="search"

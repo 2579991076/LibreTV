@@ -24,7 +24,7 @@ import { allLiveSources, isSourceDisabled, keyBelongsToSubscription, resolveSour
 import type { SourceConfig } from '@/lib/types';
 import { useToast } from './toast';
 import { formatRelativeTime, hostnameOf, validateSourceUrl, cn } from '@/lib/utils';
-import { exportConfig, importConfig } from '@/lib/db';
+import { exportConfig, importConfig, LEGACY_SETTINGS_EXPORT_NAME, SETTINGS_EXPORT_NAME } from '@/lib/db';
 import { PERSIST_KEY } from '@/lib/persist-storage';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useAuth } from './auth';
@@ -791,7 +791,7 @@ const REFRESH_OPTIONS: DropdownOption[] = [
 
 /**
  * 数据源订阅 / 分享：
- * - 订阅：填入远程订阅地址（LibreTV-SourceList JSON、TVBOX 配置 JSON 或接口目录 JSON，
+ * - 订阅：填入远程订阅地址（源源の放映室-SourceList JSON、TVBOX 配置 JSON 或接口目录 JSON，
  *   由服务端自动识别），一次拉取点播源与直播源，可随时重新同步；
  * - 自动刷新：每个订阅可单独设周期（默认手动），到期才在打开站点时静默同步；
  * - 分享：把当前点播源 + 直播源导出为同格式 JSON 文件，托管到任意位置即可被他人订阅。
@@ -881,7 +881,7 @@ function SourceSubscriptions() {
 
     setPublishing(true);
     try {
-      const result = await api.publishSourceList({ name: 'LibreTV-SourceList', sources, liveSources });
+      const result = await api.publishSourceList({ name: '源源の放映室-SourceList', sources, liveSources });
       setPublished(result);
       toast(`已发布 ${result.sources} 个点播源、${result.liveSources} 个直播源到 ${result.provider}`, 'success');
     } catch (err) {
@@ -920,7 +920,7 @@ function SourceSubscriptions() {
       })
       .map(({ name, url, epg }) => ({ name: name || hostnameOf(url), url, epg }));
 
-    const payload = { name: 'LibreTV-SourceList', version: 2, exportedAt: Date.now(), sources, liveSources };
+    const payload = { name: '源源の放映室-SourceList', version: 2, exportedAt: Date.now(), sources, liveSources };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1256,7 +1256,8 @@ function summarizeConfig(text: string): string {
   } catch {
     throw new Error('文件不是合法的 JSON');
   }
-  if (cfg.name !== 'LibreTV-Settings') throw new Error('不是本机的配置文件');
+  if (cfg.name !== SETTINGS_EXPORT_NAME && cfg.name !== LEGACY_SETTINGS_EXPORT_NAME)
+    throw new Error('不是本机的配置文件');
 
   const parts: string[] = [];
   const settingsRaw = cfg.data?.[PERSIST_KEY];

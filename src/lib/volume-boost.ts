@@ -34,6 +34,15 @@
 /** 放大倍数。想调整音量上限只改这一个常量即可（建议 1.5 ~ 2）。 */
 export const VOLUME_BOOST_GAIN = 1.8;
 
+/** iOS：iPhone/iPad/iPod，或 iPadOS（UA 伪装成 Mac + 多点触控） */
+function isIOS(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  );
+}
+
 /**
  * 判断当前媒体源能否安全接入 Web Audio。
  *
@@ -251,12 +260,16 @@ function doAttach(handle: Handle, ctx: AudioContext): boolean {
  * 给一个 video 元素挂上音量放大图。
  * 返回句柄（调用方在卸载时 dispose）；跳过或失败时返回 null，播放器照常工作。
  * 可重复调用（幂等）：已挂则返回同一句柄，跳过时后续 src 变安全可重试。
+ *
+ * iOS Safari 一律不挂：Web Audio 改道会破坏 AirPlay 与锁屏「正在播放」
+ * 信息，iPhone 是主力机型，宁可不放大也不能断 AirPlay。
  */
 export function attachVolumeBoost(
   video: HTMLVideoElement | null | undefined,
   gain = VOLUME_BOOST_GAIN
 ): VolumeBoostHandle | null {
   if (!video || typeof window === 'undefined') return null;
+  if (isIOS()) return null;
   const existing = attached.get(video);
   if (existing && !existing.disposed) return existing;
   // CORS 不安全时绝不创建节点：接入即静音，比不放大更糟（且允许后续重试）

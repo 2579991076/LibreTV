@@ -6,7 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/client-api';
 import { copyToClipboard } from '@/lib/clipboard';
 import { Header } from '@/components/header';
-// 播放器（artplayer + hls.js）按需加载：拆出独立 chunk，不占首屏 First Load JS
+// 播放器（video.js）按需加载：拆出独立 chunk，不占首屏 First Load JS
 import dynamic from 'next/dynamic';
 const LivePlayer = dynamic(() => import('@/components/live-player').then((m) => m.LivePlayer), {
   ssr: false,
@@ -185,6 +185,8 @@ function LiveContent() {
         if (target.isContentEditable) return;
         const tag = target.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        // 焦点在按钮上时退格/方向键不应切台（点完按钮焦点会落在按钮上）
+        if (tag === 'BUTTON' || target.closest('button')) return;
         if (target.closest('[data-channel-list]')) return;
       }
       e.preventDefault();
