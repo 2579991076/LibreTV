@@ -55,6 +55,8 @@ export function parseSearchList(
  * 从 vod_play_url 中提取分集地址：格式 源1$$$源2，集1$URL1#集2$URL2。
  * 部分源（如量子 lziapi、非凡 ffzy）第一条线路是网页中转页（…/share/xxx，不可播），
  * 真实 m3u8 在后面的线路里，因此优先取包含 m3u8 直链的线路；均无 m3u8 时回退第一条。
+ * 光速/极速等源给的整条都是播放页（…/play/xxxx，无视频后缀），真实 m3u8 在
+ * 播放页地址后加 /index.m3u8，因此对无视频后缀的地址统一补 /index.m3u8。
  */
 export function extractEpisodesFromPlayUrl(playUrl: string): string[] {
   if (!playUrl) return [];
@@ -71,7 +73,44 @@ export function extractEpisodesFromPlayUrl(playUrl: string): string[] {
     )
     .filter((eps) => eps.length > 0);
   if (groups.length === 0) return [];
-  return groups.find((eps) => eps.some((url) => url.includes('.m3u8'))) ?? groups[0];
+  const picked =
+    groups.find((eps) => eps.some((url) => url.includes('.m3u8'))) ?? groups[0];
+  return picked.map(resolvePlayPageUrl);
+}
+
+const VIDEO_EXTS = [
+  '.m3u8',
+  '.mp4',
+  '.flv',
+  '.mkv',
+  '.avi',
+  '.mov',
+  '.webm',
+  '.ts',
+  '.m4s',
+  '.mpd',
+];
+
+/**
+ * 把播放页地址解析为真实视频地址：已有视频后缀（.m3u8/.mp4 等）或代理地址原样返回；
+ * 否则视为播放页（光速/极速类 …/play/xxxx），补 /index.m3u8。
+ * 量子 share 链接已整体 404，补了也一样 404，不影响（播放器会换源）。
+ */
+export function resolvePlayPageUrl(url: string): string {
+  if (!url) return url;
+  try {
+    const u = new URL(url);
+    const path = u.pathname.toLowerCase();
+    if (VIDEO_EXTS.some((ext) => path.endsWith(ext))) return url;
+    if (path.endsWith('/index.m3u8')) return url;
+    if (u.pathname.startsWith('/api/proxy')) return url;
+    u.pathname = u.pathname.replace(/\/+$/, '') + '/index.m3u8';
+    u.search = '';
+    u.hash = '';
+    return u.toString();
+  } catch {
+    return url;
+  }
 }
 
 /** 从简介文本中兜底提取 m3u8 链接 */
