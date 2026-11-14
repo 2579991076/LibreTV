@@ -730,6 +730,47 @@ export function PlayerShell({
     });
     playerRef.current = player;
 
+    // —— iOS 原生全屏：iPhone 上标准 Fullscreen API 只会按当前朝向（竖屏）铺满，
+    // 不会跟随手机转横屏；原生 webkitEnterFullscreen 才会跟随旋转。
+    // Video.js 优先走标准 API，这里在 iOS 上改走 tech 的原生 enter/exitFullScreen
+    //（内部已处理“暂停且无元数据时先 priming”），全屏状态由
+    // webkitbeginfullscreen/webkitendfullscreen 代理回 fullscreenchange 同步。
+    {
+      type NativeFSVideo = HTMLVideoElement & {
+        webkitEnterFullscreen?: () => void;
+        webkitExitFullScreen?: () => void;
+        webkitDisplayingFullscreen?: boolean;
+      };
+      type NativeFSTech = { enterFullScreen?: () => void; exitFullScreen?: () => void };
+      const nativeVideo = videoEl as NativeFSVideo;
+      const nativeTech = () => player.tech() as unknown as NativeFSTech | null;
+      const hasNativeFullscreen = () => typeof nativeVideo.webkitEnterFullscreen === 'function';
+      const origRequestFullscreen = player.requestFullscreen.bind(player);
+      const origExitFullscreen = player.exitFullscreen.bind(player);
+      player.requestFullscreen = ((options) => {
+        if (hasNativeFullscreen()) {
+          try {
+            nativeTech()?.enterFullScreen?.();
+            return Promise.resolve();
+          } catch {
+            /* 失败则走标准路径 */
+          }
+        }
+        return origRequestFullscreen(options);
+      }) as typeof player.requestFullscreen;
+      player.exitFullscreen = (() => {
+        if (hasNativeFullscreen() && nativeVideo.webkitDisplayingFullscreen) {
+          try {
+            nativeTech()?.exitFullScreen?.();
+            return Promise.resolve();
+          } catch {
+            /* 失败则走标准路径 */
+          }
+        }
+        return origExitFullscreen();
+      }) as typeof player.exitFullscreen;
+    }
+
     // —— 控制条自定义按钮 ——
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const controlBar = player.getChild('controlBar') as any;
@@ -1319,8 +1360,9 @@ export function PlayerShell({
         g.mode = 'none';
         return;
       }
-      // 点按：区分单击与双击。单击延时 280ms 再执行（等第二击）；
-      // 第二击在 280ms 内落下即双击：左半屏快退 10s，右半屏快进 10s。
+      // 点按：区分单击与双击。单击延时 280ms 再执行（等第二击）。
+      // 单击只切换控制栏显隐（Video.js 内置 tap 已处理），不切换播放/暂停；
+      // 双击：左 1/3 快退 10s，右 1/3 快进 10s，中间 1/3 播放/暂停。
       if (isOnControl(e.target)) { g.mode = 'none'; return; }
       const now = Date.now();
       const rect = el?.getBoundingClientRect();
@@ -1330,20 +1372,27 @@ export function PlayerShell({
         if (g.singleTapTimer) { clearTimeout(g.singleTapTimer); g.singleTapTimer = null; }
         g.lastTapAt = 0;
         const duration = (player.duration() ?? 0);
-        const isRight = rect ? x > rect.left + rect.width / 2 : true;
-        const target = isRight
-          ? Math.min((player.currentTime() ?? 0) + 10, Number.isFinite(duration) ? duration : Infinity)
-          : Math.max(0, (player.currentTime() ?? 0) - 10);
-        player.currentTime(target);
-        showHint(isRight ? '快进 10s' : '快退 10s');
+        const width = rect?.width ?? 0;
+        const relX = rect ? x - rect.left : width / 2;
+        if (width > 0 && relX >= width / 3 && relX <= (2 * width) / 3) {
+          // 中间 1/3：播放/暂停
+          if (player.paused()) { void player.play()?.catch(() => {}); showHint('播放'); }
+          else { player.pause(); showHint('暂停'); }
+        } else {
+          const isRight = rect ? x > rect.left + rect.width / 2 : true;
+          const target = isRight
+            ? Math.min((player.currentTime() ?? 0) + 10, Number.isFinite(duration) ? duration : Infinity)
+            : Math.max(0, (player.currentTime() ?? 0) - 10);
+          player.currentTime(target);
+          showHint(isRight ? '快进 10s' : '快退 10s');
+        }
       } else {
-        // 可能是单击：先记下，等 280ms 无第二击再执行播放/暂停
+        // 可能是单击：先记下，等 280ms 无第二击再执行。
+        // 单击不切换播放/暂停（控制栏显隐由 Video.js 内置 tap 处理）。
         g.lastTapAt = now;
         g.lastTapX = x;
         g.singleTapTimer = setTimeout(() => {
           g.singleTapTimer = null;
-          if (player.paused()) { void player.play()?.catch(() => {}); }
-          else { player.pause(); }
           g.lastTapAt = 0;
         }, 280);
       }

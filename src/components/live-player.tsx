@@ -277,6 +277,46 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
     });
     playerRef.current = player;
 
+    // —— iOS 原生全屏：iPhone 上标准 Fullscreen API 只会按当前朝向（竖屏）铺满，
+    // 不会跟随手机转横屏；原生 webkitEnterFullscreen 才会跟随旋转。
+    // Video.js 优先走标准 API，这里在 iOS 上改走 tech 的原生 enter/exitFullScreen，
+    // 全屏状态由 webkitbeginfullscreen/webkitendfullscreen 代理回 fullscreenchange 同步。
+    {
+      type NativeFSVideo = HTMLVideoElement & {
+        webkitEnterFullscreen?: () => void;
+        webkitExitFullScreen?: () => void;
+        webkitDisplayingFullscreen?: boolean;
+      };
+      type NativeFSTech = { enterFullScreen?: () => void; exitFullScreen?: () => void };
+      const nativeVideo = videoEl as NativeFSVideo;
+      const nativeTech = () => player.tech() as unknown as NativeFSTech | null;
+      const hasNativeFullscreen = () => typeof nativeVideo.webkitEnterFullscreen === 'function';
+      const origRequestFullscreen = player.requestFullscreen.bind(player);
+      const origExitFullscreen = player.exitFullscreen.bind(player);
+      player.requestFullscreen = ((options) => {
+        if (hasNativeFullscreen()) {
+          try {
+            nativeTech()?.enterFullScreen?.();
+            return Promise.resolve();
+          } catch {
+            /* 失败则走标准路径 */
+          }
+        }
+        return origRequestFullscreen(options);
+      }) as typeof player.requestFullscreen;
+      player.exitFullscreen = (() => {
+        if (hasNativeFullscreen() && nativeVideo.webkitDisplayingFullscreen) {
+          try {
+            nativeTech()?.exitFullScreen?.();
+            return Promise.resolve();
+          } catch {
+            /* 失败则走标准路径 */
+          }
+        }
+        return origExitFullscreen();
+      }) as typeof player.exitFullscreen;
+    }
+
     // 上一台/下一台：注册到控制条最左侧（普通态与全屏均可见），未传不显示
     const channelBtnSvg = (path: string) =>
       `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" style="display:block;margin:auto"><path d="${path}"/></svg>`;
