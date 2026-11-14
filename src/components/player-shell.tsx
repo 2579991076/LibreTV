@@ -5,7 +5,7 @@ import Artplayer from 'artplayer';
 import Hls, { type HlsConfig } from 'hls.js';
 
 import { PlaybackRecovery, describeHlsError } from '@/lib/playback-recovery';
-import { createHlsLoader } from '@/lib/hls-loader';
+import { installIOSFullscreenOverride } from '@/lib/videojs-ios-fullscreen';
 import {
   getVideoPrefetcher,
   getNextEpisodePrefetcher,
@@ -43,6 +43,172 @@ const round1 = (v: number) => Math.round(v * 10) / 10;
  * 而不销毁重建。否则在「网页全屏（页面全屏）」下整实例重建会丢失全屏上下文、
  * 重建 <video> 元素，触发「黑屏有声」的渲染竞态。
  */
+
+type VideoJsPlayer = ReturnType<typeof videojs>;
+
+/** 地址 → Video.js src：.m3u8 或无明确后缀默认 HLS；mp4/webm/mov 走原生容器 */
+function sourceTypeOf(url: string): { src: string; type: string } {
+  const lower = url.toLowerCase().split('?')[0];
+  if (lower.endsWith('.mp4')) return { src: url, type: 'video/mp4' };
+  if (lower.endsWith('.webm')) return { src: url, type: 'video/webm' };
+  if (lower.endsWith('.mov')) return { src: url, type: 'video/quicktime' };
+  if (lower.endsWith('.m4v')) return { src: url, type: 'video/mp4' };
+  // 其它（含无后缀、带 token 的地址）默认按 HLS 处理，与旧版一致
+  return { src: url, type: 'application/x-mpegURL' };
+}
+
+/**
+ * 是否走系统原生 HLS（iOS/macOS Safari）：原生播放时清单由浏览器直接拉，
+ * 不经过 VHS；这类浏览器去广告开着时改走代理拿清单，让服务端先把广告段删干净（分片仍直连）。
+ * canPlayType 在 iOS/macOS Safari 上对 mpegurl 返回 probably/maybe，
+ * 在 Chrome/Firefox 上返回空串。
+ */
+let nativeHlsCache: boolean | null = null;
+function supportsNativeHls(): boolean {
+  if (nativeHlsCache !== null) return nativeHlsCache;
+  try {
+    const v = document.createElement('video');
+    nativeHlsCache = v.canPlayType('application/vnd.apple.mpegurl') !== '';
+  } catch {
+    nativeHlsCache = false;
+  }
+  return nativeHlsCache;
+}
+
+/** 从代理地址里反解出原始直连地址（stripAds 代理失败时的兜底用）；非代理地址原样返回 */
+function originalDirectUrl(url: string): string {
+  if (!url.startsWith('/api/proxy')) return url;
+  try {
+    const inner = new URL(url, window.location.origin).searchParams.get('url');
+    return inner || url;
+  } catch {
+    return url;
+  }
+}
+
+/** 画质菜单：VHS qualityLevels 的封装。iOS 原生 HLS 下 qualityLevels 为空，只显示「自动」。 */
+let qualityComponentsRegistered = false;
+function registerQualityComponents(): void {
+  if (qualityComponentsRegistered) return;
+  qualityComponentsRegistered = true;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const MenuButtonBase = videojs.getComponent('MenuButton') as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const MenuItemBase = videojs.getComponent('MenuItem') as any;
+    if (!MenuButtonBase || !MenuItemBase) return;
+
+    class QualityMenuItem extends MenuItemBase {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      constructor(player: any, options: any) {
+        super(player, options);
+        this.qualityLabel_ = options.label;
+        this.qualityLevel_ = options.level ?? null; // null = 自动（全部档位启用）
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      handleClick(_event: any): void {
+        const player = this.player();
+        const levels = player.qualityLevels?.();
+        if (levels) {
+          if (this.qualityLevel_ === null) {
+            for (let i = 0; i < levels.length; i++) levels[i].enabled = true;
+          } else {
+            for (let i = 0; i < levels.length; i++) {
+              levels[i].enabled = levels[i] === this.qualityLevel_;
+            }
+          }
+        }
+        // 刷新整组选中态
+        const button = this.player()
+          .controlBar?.getChild('QualityMenuButton') as { update?: () => void } | undefined;
+        button?.update?.();
+        super.handleClick(_event);
+      }
+    }
+
+    class QualityMenuButton extends MenuButtonBase {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      constructor(player: any, options: any) {
+        super(player, options);
+        this.controlText('画质');
+        const levels = player.qualityLevels?.();
+        if (levels) {
+          // 档位就绪/切换时重建菜单项
+          levels.on('addqualitylevel', () => this.update());
+          levels.on('change', () => this.update());
+        }
+        this.update();
+      }
+      buildCSSClass(): string {
+        return `vjs-quality-menu-button ${super.buildCSSClass()}`;
+      }
+      createEl(): Element {
+        const el = super.createEl();
+        // 用文字按钮而非图标：画质档位（1080p/720p/自动）直接可读
+        const btn = el.querySelector('.vjs-icon-placeholder');
+        if (btn) {
+          btn.textContent = '自动';
+          (btn as HTMLElement).style.cssText =
+            'display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:#fff;';
+        }
+        return el;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      createItems(): any[] {
+        const player = this.player();
+        const levels = player.qualityLevels?.();
+        const items: unknown[] = [];
+        // 「自动」永远在最前
+        items.push(
+          new QualityMenuItem(player, {
+            label: '自动',
+            level: null,
+            selectable: true,
+            selected: !levels || levels.selectedIndex === -1,
+          })
+        );
+        if (levels) {
+          // 高档位在前
+          const sorted = Array.from({ length: levels.length }, (_, i) => levels[i]).sort(
+            (a, b) => (b.height || 0) - (a.height || 0)
+          );
+          for (const level of sorted) {
+            const h = level.height;
+            if (typeof h !== 'number' || h <= 0) continue;
+            items.push(
+              new QualityMenuItem(player, {
+                label: `${h}p`,
+                level,
+                selectable: true,
+                selected: level.enabled && levels.selectedIndex !== -1,
+              })
+            );
+          }
+        }
+        return items as never[];
+      }
+      update(): void {
+        // 刷新按钮上的当前档位文字（自动 / 1080p / …）
+        super.update();
+        const player = this.player();
+        const levels = player.qualityLevels?.();
+        let label = '自动';
+        if (levels && levels.selectedIndex >= 0) {
+          const sel = levels[levels.selectedIndex];
+          if (sel && typeof sel.height === 'number' && sel.height > 0) label = `${sel.height}p`;
+        }
+        const btn = this.el()?.querySelector('.vjs-icon-placeholder');
+        if (btn) btn.textContent = label;
+      }
+    }
+
+    // 注册时用 any：子类化 MenuButton 后静态方法签名与 Component 不完全一致
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (videojs as any).registerComponent('QualityMenuButton', QualityMenuButton);
+  } catch {
+    // 注册失败不影响播放：只是没有画质菜单
+  }
+}
 
 /** 暴露给播放页的读取接口：「记录当前」需要比 5s 节流进度回调更精确的位置 */
 export interface PlayerSkipApi {
@@ -506,11 +672,9 @@ export function PlayerShell({
   useEffect(() => {
     if (!containerRef.current || !propsRef.current.url) return;
     const initialUrl = propsRef.current.url;
-    // ArtPlayer 默认 3 秒才隐藏控制栏；桌面失去鼠标悬停后缩短为 0.8 秒。
-    // 触屏没有 hover，自动隐藏会让按钮来不及点（issue #937）：改为常驻，
-    // 由「点按视频 toggle」收起。CONTROL_HIDE_TIME 是 static，创建后修改立即生效。
-    const touchPointer = prefersTouchPointer();
-    Artplayer.CONTROL_HIDE_TIME = touchPointer ? TOUCH_CONTROL_HIDE_MS : DESKTOP_CONTROL_HIDE_MS;
+
+    // 画质菜单组件注册一次
+    registerQualityComponents();
 
     // 初始化每集状态
     mediaHealthyRef.current = true;
@@ -976,9 +1140,6 @@ export function PlayerShell({
       if (controlHideTimer) clearTimeout(controlHideTimer);
       restoreCleanupRef.current?.();
       restoreCleanupRef.current = null;
-      Artplayer.CONTROL_HIDE_TIME = ART_DEFAULT_CONTROL_HIDE_MS;
-      hlsRef.current?.destroy();
-      hlsRef.current = null;
       recoveryRef.current?.dispose();
       getVideoPrefetcher().stop();
       // 播放页可能仍持有读取接口：销毁前显式置空，避免「记录当前」读到已销毁实例
@@ -1062,7 +1223,7 @@ export function PlayerShell({
   const firstAdFilterRef = useRef(true);
   useEffect(() => {
     if (firstAdFilterRef.current) { firstAdFilterRef.current = false; return; }
-    if (artRef.current && hlsRef.current) {
+    if (playerRef.current) {
       // 用当前实际媒体地址：代理回退生效时切广告过滤不应跳回直连形式
       loadEpisode(currentMediaUrlRef.current || propsRef.current.url);
     }
