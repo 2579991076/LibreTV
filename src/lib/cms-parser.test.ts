@@ -10,6 +10,7 @@ import {
   parseDetail,
   parseDetailPageHtml,
   parseSearchList,
+  resolvePlayPageUrl,
 } from './cms-parser';
 
 const source = { key: 'test', name: '测试源', url: 'https://api.example.com/provide/vod' };
@@ -87,6 +88,49 @@ describe('extractEpisodesFromPlayUrl', () => {
 
   it('空输入返回空数组', () => {
     expect(extractEpisodesFromPlayUrl('')).toEqual([]);
+  });
+
+  it('整条都是播放页时补 /index.m3u8（光速/极速类源）', () => {
+    const play = '第01集$https://v.gsuus.com/play/egJJp33d#第02集$https://v.gsuus.com/play/ab12Cd';
+    expect(extractEpisodesFromPlayUrl(play)).toEqual([
+      'https://v.gsuus.com/play/egJJp33d/index.m3u8',
+      'https://v.gsuus.com/play/ab12Cd/index.m3u8',
+    ]);
+  });
+
+  it('已有 m3u8 直链的线路优先且不被改写', () => {
+    const play =
+      '第01集$https://v.gsuus.com/play/egJJp33d$$$第01集$https://cdn/x/index.m3u8';
+    expect(extractEpisodesFromPlayUrl(play)).toEqual(['https://cdn/x/index.m3u8']);
+  });
+});
+
+describe('resolvePlayPageUrl', () => {
+  it('直链（.m3u8/.mp4）原样返回', () => {
+    expect(resolvePlayPageUrl('https://cdn/x/index.m3u8')).toBe(
+      'https://cdn/x/index.m3u8'
+    );
+    expect(resolvePlayPageUrl('https://cdn/x/v.mp4')).toBe('https://cdn/x/v.mp4');
+  });
+
+  it('播放页补 /index.m3u8，末尾斜杠先去掉', () => {
+    expect(resolvePlayPageUrl('https://v.gsuus.com/play/egJJp33d')).toBe(
+      'https://v.gsuus.com/play/egJJp33d/index.m3u8'
+    );
+    expect(resolvePlayPageUrl('https://vv.jisuzyv.com/play/abc/')).toBe(
+      'https://vv.jisuzyv.com/play/abc/index.m3u8'
+    );
+  });
+
+  it('已是 /index.m3u8 不重复补', () => {
+    expect(resolvePlayPageUrl('https://v.gsuus.com/play/egJJp33d/index.m3u8')).toBe(
+      'https://v.gsuus.com/play/egJJp33d/index.m3u8'
+    );
+  });
+
+  it('非法 URL 原样返回', () => {
+    expect(resolvePlayPageUrl('not-a-url')).toBe('not-a-url');
+    expect(resolvePlayPageUrl('')).toBe('');
   });
 });
 
