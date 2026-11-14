@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/client-api';
-// 播放器（artplayer + hls.js）按需加载：拆出独立 chunk，不占首屏 First Load JS
+// 播放器（Video.js 8）按需加载：拆出独立 chunk，不占首屏 First Load JS
 const PlayerShell = dynamic(() => import('@/components/player-shell').then((m) => m.PlayerShell), {
   ssr: false,
   loading: () => (
@@ -34,7 +34,7 @@ import {
   upsertHistory,
   db,
 } from '@/lib/db';
-import { cn } from '@/lib/utils';
+import { buildWatchUrl, cn } from '@/lib/utils';
 
 /**
  * 播放页（唯一入口，替代旧版 watch.html → player.html 跳转链）。
@@ -146,6 +146,11 @@ function WatchContent() {
 
   const goEpisode = useCallback(
     (index: number) => {
+      // 手动切集要取消待触发的自动连播：否则 800ms 内点的集会被旧定时器覆盖（M2）
+      if (autoNextTimer.current) {
+        clearTimeout(autoNextTimer.current);
+        autoNextTimer.current = null;
+      }
       const sp = new URLSearchParams(searchParams.toString());
       sp.set('index', String(index));
       sp.set('url', episodes[index] || directUrl);
@@ -205,9 +210,101 @@ function WatchContent() {
   const handleEnded = useCallback(() => {
     if (vodId) clearProgress(sourceKey, vodId, currentIndex).catch(() => {});
     if (store.autoplayNext && currentIndex < episodes.length - 1) {
-      autoNextTimer.current = setTimeout(() => goEpisode(currentIndex + 1), 800);
+      // 先清掉可能残留的旧定时器（播完又手动切集的竞态），再设新的
+      if (autoNextTimer.current) clearTimeout(autoNextTimer.current);
+      autoNextTimer.current = setTimeout(() => {
+        autoNextTimer.current = null;
+        goEpisode(currentIndex + 1);
+      }, 800);
     }
   }, [store.autoplayNext, currentIndex, episodes.length, goEpisode, sourceKey, vodId]);
+
+  // 换集（index 变）时取消自动连播定时器：集数已变，旧定时器的目标集已过时
+  useEffect(() => {
+    if (autoNextTimer.current) {
+      clearTimeout(autoNextTimer.current);
+      autoNextTimer.current = null;
+    }
+  }, [currentIndex]);
+
+  // —— 自动换源（item 2）：当前源被恢复策略判不可用时，自动找下一个可播的源 ——
+  // 同一片名内已失败的源不再重试；换片（标题变）时重置。全部试过仍无可用源时
+  // 打开换源面板让用户手动选，不静默失败。
+  const failedSourcesRef = useRef<Set<string>>(new Set());
+  const failoverInFlightRef = useRef(false);
+  useEffect(() => {
+    failedSourcesRef.current = new Set();
+    failoverInFlightRef.current = false;
+  }, [videoTitle]);
+
+  const handleRequestSwitchSource = useCallback(
+    async (reason: string) => {
+      if (failoverInFlightRef.current) return;
+      if (!videoTitle || videoTitle === '未知视频' || !vodId) {
+        // 直连链接/无标题：没法按标题跨源搜索，直接开换源面板
+        toast('当前源不可用，请手动切换资源', 'warning');
+        setSwitchOpen(true);
+        return;
+      }
+      failoverInFlightRef.current = true;
+      failedSourcesRef.current.add(sourceKey);
+      toast(`当前源不可用（${reason}），正在尝试其他源…`, 'info');
+      try {
+        // 复用换源面板的匹配口径：跨源按标题搜索，取同名/同前缀
+        const seen = new Set<string>();
+        const sources = store.selectedKeys
+          .map((key) => resolveSource(store, key))
+          .filter((s): s is NonNullable<typeof s> => {
+            if (!s || seen.has(s.key)) return false;
+            seen.add(s.key);
+            return true;
+          })
+          .filter((s) => !failedSourcesRef.current.has(s.key));
+        if (sources.length === 0) {
+          toast('没有其他源可尝试，请手动切换资源', 'warning');
+          setSwitchOpen(true);
+          return;
+        }
+        const { list } = await api.search(videoTitle, sources, store.yellowFilter);
+        const title = videoTitle.trim();
+        const candidates: { source: NonNullable<ReturnType<typeof resolveSource>>; vodId: string }[] = [];
+        for (const s of sources) {
+          const hits = list.filter((r) => r.sourceKey === s.key);
+          const exact =
+            hits.find((r) => (r.name || '').trim() === title) ??
+            hits.find((r) => (r.name || '').trim().startsWith(title));
+          if (exact) candidates.push({ source: s, vodId: exact.vodId });
+        }
+        // 逐个测速（详情接口耗时），取第一个真正可用的；测速失败的跳过
+        for (const c of candidates) {
+          const r = await api.detailSpeed(c.vodId, c.source);
+          const count = r.detail?.episodes.length ?? 0;
+          if (!r.ok || count === 0) continue;
+          const targetIndex = currentIndex < count ? currentIndex : 0;
+          toast(`已切换到「${c.source.name}」继续播放`, 'success');
+          router.push(
+            buildWatchUrl({
+              sourceKey: c.source.key,
+              vodId: c.vodId,
+              index: targetIndex,
+              title: videoTitle,
+              sourceUrl: c.source.url,
+              detail: c.source.detail,
+            })
+          );
+          return;
+        }
+        toast('其他源也暂无可用资源，请手动选择', 'warning');
+        setSwitchOpen(true);
+      } catch {
+        toast('自动换源失败，请手动切换资源', 'error');
+        setSwitchOpen(true);
+      } finally {
+        failoverInFlightRef.current = false;
+      }
+    },
+    [videoTitle, vodId, sourceKey, store, currentIndex, router, toast]
+  );
 
   // 快捷键（Shift+I/O/S/E）记录片段：校验后写入
   const handleRecordSegment = useCallback(
@@ -339,6 +436,7 @@ function WatchContent() {
                   onTimeUpdate={handleProgress}
                   onPause={handleProgress}
                   onEnded={handleEnded}
+                  onRequestSwitchSource={handleRequestSwitchSource}
                   hasPrevEpisode={currentIndex > 0}
                   hasNextEpisode={episodes.length > 0 && currentIndex < episodes.length - 1}
                   onPrevEpisode={() => goEpisode(currentIndex - 1)}

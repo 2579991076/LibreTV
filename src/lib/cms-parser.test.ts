@@ -31,6 +31,13 @@ describe('parseSearchList', () => {
     expect(items[1].vodId).toBe('abc-1');
   });
 
+  it('解析演员与导演字段（ac=videolist 全字段下发）', () => {
+    const items = parseSearchList({
+      list: [{ vod_id: 1, vod_name: '大话西游', vod_actor: '周星驰,吴孟达', vod_director: '刘镇伟' }],
+    }, source);
+    expect(items[0]).toMatchObject({ actor: '周星驰,吴孟达', director: '刘镇伟' });
+  });
+
   it('对缺失字段健壮', () => {
     const items = parseSearchList({ list: [{}] }, source);
     expect(items[0].vodId).toBe('');
@@ -248,5 +255,34 @@ describe('filterRelevantResults', () => {
     expect(filterRelevantResults([
       { name: '10月17日 足球联赛' }, {}, { name: '' }, relevant,
     ], '赛博朋克：边缘行者 2')).toEqual([relevant]);
+  });
+
+  it('保留演员匹配：标题不含人名、但演员栏含人名的条目不再被丢弃', () => {
+    const items = [
+      { name: '大话西游', actor: '周星驰,吴孟达', director: '刘镇伟' },
+      { name: '无关电影', actor: '王五', director: '赵六' },
+    ];
+    expect(filterRelevantResults(items, '周星驰')).toEqual([items[0]]);
+  });
+
+  it('保留导演匹配', () => {
+    const items = [
+      { name: '大话西游', actor: '周星驰', director: '刘镇伟' },
+      { name: '无关电影', actor: '王五', director: '赵六' },
+    ];
+    expect(filterRelevantResults(items, '刘镇伟')).toEqual([items[0]]);
+  });
+
+  it('多词查询可分属不同字段：人名在演员栏、片名在标题栏', () => {
+    const items = [
+      { name: '大话西游', actor: '周星驰,吴孟达', director: '刘镇伟' },
+      { name: '大话西游', actor: '王五', director: '赵六' },
+    ];
+    expect(filterRelevantResults(items, '周星驰 大话西游')).toEqual([items[0]]);
+  });
+
+  it('演员/导演栏都不含关键词时仍丢弃', () => {
+    const items = [{ name: '大话西游', actor: '周星驰', director: '刘镇伟' }];
+    expect(filterRelevantResults(items, '成龙')).toEqual([]);
   });
 });

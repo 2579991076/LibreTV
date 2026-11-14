@@ -49,6 +49,7 @@ export function SmartImage({
       alt={alt}
       className={className}
       loading={loading}
+      decoding="async"
       referrerPolicy="no-referrer"
       onError={() => setIdx((i) => i + 1)}
     />

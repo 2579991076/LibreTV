@@ -33,7 +33,7 @@ export interface AppSettings {
   /**
    * 底部细进度条：默认开启（保持既有观感，不替用户改行为）。
    * 开启时控制栏收起后画面底边常驻一条 3px 进度线；关闭后收起即完全隐藏。
-   * 类名判定与同步见 lib/mini-progress-bar.ts。
+   * 由播放器（player-shell.tsx 的 miniBar）按控制栏显隐同步。
    */
   miniProgressBar: boolean;
   /** 跳过片段：按归一化剧名持久化，详见 lib/skip-marks.ts */
@@ -56,7 +56,7 @@ export interface SubscriptionSyncCounts {
 }
 
 /**
- * 数据源订阅：远程源列表（LibreTV-SourceList JSON 或 TVBOX 配置 JSON，由服务端自动识别），可一键同步更新。
+ * 数据源订阅：远程源列表（源源の放映室-SourceList JSON 或 TVBOX 配置 JSON，由服务端自动识别），可一键同步更新。
  * 一份订阅同时下发点播源与直播源；老订阅只有点播源。订阅内容一律归一化为本站源结构，故存储层与格式无关。
  */
 export interface SourceSubscription {

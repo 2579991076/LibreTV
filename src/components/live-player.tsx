@@ -1,22 +1,26 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import Artplayer from 'artplayer';
-import Hls, { type HlsConfig } from 'hls.js';
+import videojs from 'video.js';
+import 'video.js/dist/video-js.css';
+import type Mpegts from 'mpegts.js';
 import { Spinner } from './states';
-import { prefersTouchPointer } from '@/lib/touch-pointer';
-import { ART_DEFAULT_CONTROL_HIDE_MS, TOUCH_CONTROL_HIDE_MS } from '@/lib/control-hide';
 import { attachVolumeBoost, type VolumeBoostHandle } from '@/lib/volume-boost';
 
 /**
- * 直播播放器：与点播 player-shell 完全独立。
- * - 引擎分发：.m3u8 → hls.js（直播参数）；.flv → mpegts.js（动态加载，按需 ~150KB）；
- *   mp4/webm 等原生容器 → <video> 直接播放；
+ * 直播播放器：与点播 player-shell 完全独立，基于 Video.js 8。
+ * - 引擎分发：.m3u8 → Video.js 内置 VHS（iOS Safari 自动走原生 HLS，不经过 MSE）；
+ *   .flv → mpegts.js（动态加载，按需 ~150KB），挂在 Video.js tech 的 video 元素上；
+ *   mp4/webm 等原生容器 → Video.js 直出，容器由浏览器嗅探；
  * - 无扩展名的地址（如 /channel/xxx?token=...）默认按 HLS 处理，
  *   HLS 直连与代理均失败后**回退原生播放**一次（覆盖"内容是 MP4 却无 .m3u8 后缀"的源）；
  * - 每级直连失败自动切换到 /api/live/stream 代理通道重试一次；
- * - 直播态 UI：无进度条、无倍速、无截图、无连播。
+ * - FLV 依赖 MSE，iOS 永远播不了：iOS 上遇到 FLV 直接给明确提示，不承诺能播；
+ * - 直播态 UI：无进度条、无倍速、无截图、无连播；控制条 3s 无操作自动隐藏。
  */
+
+type VideoJsPlayer = ReturnType<typeof videojs>;
+type MpegtsPlayer = Mpegts.Player;
 
 /** 代理地址前缀（新旧形式 /api/live/stream/… 与 /api/live/stream?url=… 的共同前缀，用于防二次代理） */
 const STREAM_PROXY_PREFIX = '/api/live/stream';
@@ -30,6 +34,16 @@ export function isFlvUrl(url: string): boolean {
 /** 浏览器原生可播的直链容器（非 HLS/FLV） */
 const NATIVE_MEDIA_RE = /\.(mp4|m4v|webm|ogv|ogg|mov)(\?|$)/i;
 
+/** 原生容器扩展名 → Video.js src 用的 MIME */
+const NATIVE_MIME: Record<string, string> = {
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  webm: 'video/webm',
+  ogv: 'video/ogg',
+  ogg: 'video/ogg',
+  mov: 'video/quicktime',
+};
+
 type Engine = 'hls' | 'flv' | 'native';
 
 function engineOf(url: string): Engine {
@@ -40,6 +54,15 @@ function engineOf(url: string): Engine {
 
 function proxyUrl(url: string): string {
   return STREAM_PROXY_BASE + encodeURIComponent(url);
+}
+
+/** iOS：iPhone/iPad/iPod，或 iPadOS（UA 伪装成 Mac + 多点触控） */
+function isIOS(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  );
 }
 
 interface LivePlayerProps {
@@ -55,11 +78,9 @@ interface LivePlayerProps {
 
 export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoost }: LivePlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const artRef = useRef<any>(null);
-  const hlsRef = useRef<Hls | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mpegtsRef = useRef<any>(null);
+  const playerRef = useRef<VideoJsPlayer | null>(null);
+  const videoElRef = useRef<HTMLVideoElement | null>(null);
+  const mpegtsRef = useRef<MpegtsPlayer | null>(null);
   const [error, setError] = useState('');
   const [hint, setHint] = useState('');
   const [loading, setLoading] = useState(true);
@@ -103,29 +124,42 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
     let playbackStarted = false;
     let disposed = false;
     let destroyed = false;
-    /** 原生播放注册的 error 监听清理函数（切台/销毁时调用） */
+    /** 当前所处的加载阶段（决定播放器 error 事件之后怎么接力） */
+    let stage: 'hls-direct' | 'hls-proxy' | 'native-direct' | 'native-proxy' | 'native-fallback' | 'flv' =
+      'hls-direct';
+    /** 原生回退播放注册的 error 监听清理函数（切台/销毁时调用） */
     let nativeCleanup: (() => void) | null = null;
 
     const cleanupEngines = () => {
-      hlsRef.current?.destroy();
-      hlsRef.current = null;
       if (mpegtsRef.current) {
-        try { mpegtsRef.current.pause(); } catch { /* 忽略 */ }
-        try { mpegtsRef.current.destroy(); } catch { /* 忽略 */ }
+        try {
+          mpegtsRef.current.pause();
+        } catch {
+          /* 忽略 */
+        }
+        try {
+          mpegtsRef.current.destroy();
+        } catch {
+          /* 忽略 */
+        }
         mpegtsRef.current = null;
       }
       if (nativeCleanup) {
-        try { nativeCleanup(); } catch { /* 忽略 */ }
+        try {
+          nativeCleanup();
+        } catch {
+          /* 忽略 */
+        }
         nativeCleanup = null;
       }
     };
 
     /**
-     * 原生播放：mp4/webm 等容器交给 <video> 直接播放。
-     * 也作为 HLS 两级都失败后的兜底——覆盖"地址没有 .m3u8 后缀但内容其实是 MP4"的源。
+     * 原生回退播放：把地址直接挂到 tech 的 <video> 元素上，让浏览器嗅探容器。
+     * 作为 HLS 两级都失败后的兜底——覆盖"地址没有 .m3u8 后缀但内容其实是 MP4"的源。
      * 直连失败（CORS/混合内容）时再走一次代理。
      */
-    const setupNative = (
+    const setupNativeFallback = (
       video: HTMLVideoElement,
       mediaUrl: string,
       allowProxyFallback: boolean,
@@ -138,7 +172,7 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
         if (disposed || destroyed) return;
         if (allowProxyFallback && !mediaUrl.startsWith(STREAM_PROXY_PREFIX)) {
           showHint('直连失败，改用代理重试...');
-          setupNative(video, proxyUrl(url), false, failMessage);
+          setupNativeFallback(video, proxyUrl(url), false, failMessage);
           return;
         }
         setError(failMessage || '该地址不是可播放的直播流（内容可能是文件或错误提示）');
@@ -150,80 +184,19 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       video.play().catch(() => {});
     };
 
-    /** HLS 直播参数：小缓冲、快速追帧；与点播（大缓冲、进度恢复）刻意区分 */
-    const setupHls = (video: HTMLVideoElement, mediaUrl: string, stage: 'direct' | 'proxy') => {
+    /** HLS：Video.js src（VHS 接管；失败时 error 事件接力到代理/原生回退） */
+    const setupHls = (mediaUrl: string) => {
       cleanupEngines();
-      let liveNetRetryCount = 0;
-      let mediaRecoverCount = 0;
-      const hlsConfig: Partial<HlsConfig> = {
-        debug: false,
-        enableWorker: true,
-        liveSyncDurationCount: 3,
-        lowLatencyMode: false,
-        backBufferLength: 30,
-        maxBufferLength: 20,
-        maxMaxBufferLength: 40,
-        manifestLoadingMaxRetry: 2,
-        manifestLoadingRetryDelay: 1000,
-        fragLoadingMaxRetry: 4,
-        fragLoadingRetryDelay: 800,
-      };
-      const hls = new Hls(hlsConfig);
-      hlsRef.current = hls;
-      hls.loadSource(mediaUrl);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, (_evt, manifestData) => {
-        // H.265 检测：大量国内 IPTV 源为 HEVC 编码，Chromium 内核通常无法软解
-        const videoCodecs = (manifestData.levels || []).map((l) => l.videoCodec || '').join(',');
-        if (/hvc1|hev1|hevc/i.test(videoCodecs)) {
-          const support = video.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"');
-          if (!support) {
-            showHint('该频道为 H.265 编码，当前浏览器可能无法解码，建议用 Edge/Safari');
-          }
-        }
-        video.play().catch(() => {});
-      });
-      hls.on(Hls.Events.ERROR, (_evt, data) => {
-        if (disposed || destroyed) return;
-        const httpCode = data.response?.code;
-        const codeHint = httpCode ? `（HTTP ${httpCode}）` : '';
-        if (!data.fatal) return;
-        // 媒体错误：起播前后统一尝试恢复，次数受限防止无限 recover 循环
-        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-          if (mediaRecoverCount < 2) {
-            mediaRecoverCount++;
-            hls.recoverMediaError();
-            return;
-          }
-          setError('直播流解码失败，可能该频道编码不受当前浏览器支持，请尝试其他频道');
-          return;
-        }
-        if (!playbackStarted) {
-          if (
-            stage === 'direct' &&
-            !mediaUrl.startsWith(STREAM_PROXY_PREFIX) &&
-            (data.details === 'manifestLoadError' || data.type === Hls.ErrorTypes.NETWORK_ERROR)
-          ) {
-            showHint('直连失败，改用代理重试...');
-            // 直播 manifest 重写需要本站前缀，交给代理通道
-            setupHls(video, proxyUrl(url), 'proxy');
-            return;
-          }
-          // HLS 直连与代理均失败：可能是"无 .m3u8 后缀但内容是 MP4"的源，回退原生播放
-          showHint('HLS 解析失败，尝试原生播放...');
-          setupNative(video, url, true, `直播流加载失败${codeHint}，可能该频道已失效，请尝试其他频道`);
-          return;
-        }
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-          // 播放中网络抖动：尝试恢复拉流；连续失败达到阈值则报错退出
-          liveNetRetryCount++;
-          if (liveNetRetryCount > 5) {
-            setError(`直播流中断${codeHint}，该源可能已失效，请尝试其他频道`);
-            return;
-          }
-          hls.startLoad();
-        }
-      });
+      player.src({ src: mediaUrl, type: 'application/x-mpegURL' });
+      player.play()?.catch(() => {});
+    };
+
+    /** 原生容器：Video.js src + MIME；失败时 error 事件接力到代理 */
+    const setupNative = (mediaUrl: string) => {
+      cleanupEngines();
+      const ext = mediaUrl.match(/\.([a-z0-9]+)(\?|$)/i)?.[1]?.toLowerCase() ?? 'mp4';
+      player.src({ src: mediaUrl, type: NATIVE_MIME[ext] ?? 'video/mp4' });
+      player.play()?.catch(() => {});
     };
 
     const setupFlv = async (
@@ -232,8 +205,7 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       allowProxyFallback: boolean
     ) => {
       cleanupEngines();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let Mpegts: any;
+      let Mpegts: typeof import('mpegts.js').default;
       try {
         Mpegts = (await import('mpegts.js')).default;
       } catch {
@@ -245,7 +217,7 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
         setError('当前浏览器不支持 FLV 直播播放');
         return;
       }
-      const player = Mpegts.createPlayer(
+      const flvPlayer = Mpegts.createPlayer(
         {
           type: 'flv',
           isLive: true,
@@ -259,10 +231,10 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
           lazyLoad: false,
         }
       );
-      mpegtsRef.current = player;
-      player.attachMediaElement(video);
-      player.load();
-      player.on(Mpegts.Events.ERROR, (errType: string) => {
+      mpegtsRef.current = flvPlayer;
+      flvPlayer.attachMediaElement(video);
+      flvPlayer.load();
+      flvPlayer.on(Mpegts.Events.ERROR, (errType: string) => {
         if (disposed || destroyed) return;
         if (!playbackStarted && allowProxyFallback && !mediaUrl.startsWith(STREAM_PROXY_PREFIX)) {
           showHint('直连失败，改用代理重试...');
@@ -271,106 +243,192 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
         }
         setError(`直播流加载失败（${errType}），请尝试其他频道`);
       });
-      player.play().catch(() => {});
+      void Promise.resolve(flvPlayer.play()).catch(() => {});
     };
 
-    const engine = engineOf(url);
-    // 上一台/下一台：注册到播放器控制条（普通态与全屏均可见），未传不显示
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const controls: any[] = [];
-    const channelBtnSvg = (path: string) =>
-      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:18px;height:18px"><path d="${path}"/></svg>`;
-    if (onPrevChannel) {
-      controls.push({
-        name: 'prev-channel',
-        position: 'left',
-        index: 0,
-        html: channelBtnSvg('M11 19l-7-7 7-7m8 14l-7-7 7-7'),
-        tooltip: '上一台',
-        click: () => onPrevChannel(),
-      });
-    }
-    if (onNextChannel) {
-      controls.push({
-        name: 'next-channel',
-        position: 'left',
-        index: 1,
-        html: channelBtnSvg('M13 5l7 7-7 7M5 5l7 7-7 7'),
-        tooltip: '下一台',
-        click: () => onNextChannel(),
-      });
-    }
-    // 触屏没有 hover，原生 3 秒自动隐藏会让直播控制栏（上一台/下一台）点不到
-    // （issue #937）：触屏常驻、由点按视频 toggle 收起；桌面行为不变
-    const touchPointer = prefersTouchPointer();
-    if (touchPointer) Artplayer.CONTROL_HIDE_TIME = TOUCH_CONTROL_HIDE_MS;
+    // <video> 元素由本 effect 创建并挂进容器，销毁时随播放器一起移除，
+    // React 不直接持有它，避免 dispose 时 DOM 归属冲突。
+    const videoEl = document.createElement('video');
+    videoEl.className = 'video-js';
+    videoEl.setAttribute('playsinline', '');
+    videoEl.setAttribute('preload', 'auto');
+    containerRef.current.appendChild(videoEl);
+    videoElRef.current = videoEl;
 
-    const art = new Artplayer({
-      container: containerRef.current,
-      url,
-      // 原生容器统一用 'mp4'（仅用于选择处理函数，实际容器由浏览器嗅探）
-      type: engine === 'flv' ? 'flv' : engine === 'native' ? 'mp4' : 'm3u8',
-      volume: 0.9,
+    const player = videojs(videoEl, {
       autoplay: true,
-      // —— 直播态：关闭点播专属能力 ——
-      pip: true,
-      screenshot: false,
-      setting: false,
-      playbackRate: false,
-      aspectRatio: false,
-      fullscreen: true,
-      fullscreenWeb: true,
-      miniProgressBar: false,
-      hotkey: false,
-      mutex: true,
-      backdrop: true,
-      playsInline: true,
-      airplay: true,
-      theme: '#2563eb',
-      controls,
-      lang: navigator.language.toLowerCase().startsWith('zh') ? 'zh-cn' : 'en',
-      moreVideoAttr: { playsInline: true },
-      customType: {
-        m3u8: (video: HTMLVideoElement) => {
-          setupHls(video, url, 'direct');
-        },
-        flv: (video: HTMLVideoElement) => {
-          void setupFlv(video, url, true);
-        },
-        mp4: (video: HTMLVideoElement) => {
-          setupNative(video, url, true);
-        },
+      controls: true,
+      preload: 'auto',
+      fill: true,
+      volume: 0.9,
+      playsinline: true,
+      // 直播 UI：进度条换成 LIVE 指示（下面仍显式隐藏 progressControl 兜底）
+      liveui: true,
+      // 3s 无操作自动隐藏控制条（触屏也适用）
+      inactivityTimeout: 3000,
+      language: navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en',
+      // 不用 Video.js 自带的大播放按钮/错误弹窗/加载圈：本组件自有海报、错误面板与 Spinner
+      bigPlayButton: false,
+      errorDisplay: false,
+      loadingSpinner: false,
+      controlBar: {
+        remainingTimeDisplay: false,
       },
     });
-    artRef.current = art;
-    art.on('video:loadedmetadata', () => {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (art as any).title = title;
-      } catch { /* 忽略 */ }
+    playerRef.current = player;
+
+    // —— iOS 全屏默认横屏：竖屏时走 Video.js 的 enterFullWindow（网页全屏铺满视口）
+    // + CSS 旋转 90°（globals.css 里 body.vjs-full-window 的 portrait 规则），
+    // 点全屏就横屏，不用关竖屏锁定；横屏时走原生 webkitEnterFullscreen。
+    {
+      type NativeFSVideo = HTMLVideoElement & {
+        webkitEnterFullscreen?: () => void;
+        webkitExitFullScreen?: () => void;
+        webkitDisplayingFullscreen?: boolean;
+      };
+      type NativeFSTech = { enterFullScreen?: () => void; exitFullScreen?: () => void };
+      const nativeVideo = videoEl as NativeFSVideo;
+      const nativeTech = () => player.tech() as unknown as NativeFSTech | null;
+      const hasNativeFullscreen = () => typeof nativeVideo.webkitEnterFullscreen === 'function';
+      const isIOSPortrait = () =>
+        hasNativeFullscreen() && window.matchMedia('(orientation: portrait)').matches;
+      const origRequestFullscreen = player.requestFullscreen.bind(player);
+      const origExitFullscreen = player.exitFullscreen.bind(player);
+      player.requestFullscreen = ((options) => {
+        if (isIOSPortrait()) {
+          player.enterFullWindow();
+          return Promise.resolve();
+        }
+        if (hasNativeFullscreen()) {
+          try {
+            nativeTech()?.enterFullScreen?.();
+            return Promise.resolve();
+          } catch {
+            /* 失败则走标准路径 */
+          }
+        }
+        return origRequestFullscreen(options);
+      }) as typeof player.requestFullscreen;
+      player.exitFullscreen = (() => {
+        if (player.isFullWindow) {
+          player.exitFullWindow();
+          return Promise.resolve();
+        }
+        if (hasNativeFullscreen() && nativeVideo.webkitDisplayingFullscreen) {
+          try {
+            nativeTech()?.exitFullScreen?.();
+            return Promise.resolve();
+          } catch {
+            /* 失败则走标准路径 */
+          }
+        }
+        return origExitFullscreen();
+      }) as typeof player.exitFullscreen;
+    }
+
+    // 上一台/下一台：注册到控制条最左侧（普通态与全屏均可见），未传不显示
+    const channelBtnSvg = (path: string) =>
+      `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" style="display:block;margin:auto"><path d="${path}"/></svg>`;
+    player.ready(() => {
+      if (disposed || destroyed) return;
+      const controlBar = player.getChild('controlBar');
+      if (controlBar) {
+        // 直播隐藏进度条
+        controlBar.getChild('progressControl')?.hide();
+        let btnIndex = 0;
+        const addChannelButton = (controlText: string, svgPath: string, onClick: () => void) => {
+          const btn = controlBar.addChild(
+            'button',
+            { controlText, clickHandler: () => onClick() },
+            btnIndex++
+          );
+          const icon = btn.el().querySelector('.vjs-icon-placeholder');
+          if (icon) (icon as HTMLElement).innerHTML = channelBtnSvg(svgPath);
+        };
+        if (onPrevChannel) addChannelButton('上一台', 'M11 19l-7-7 7-7m8 14l-7-7 7-7', onPrevChannel);
+        if (onNextChannel) addChannelButton('下一台', 'M13 5l7 7-7 7M5 5l7 7-7 7', onNextChannel);
+      }
+      // FLV：tech 就绪后把 mpegts 挂到 tech 的 video 元素上
+      if (engine === 'flv' && !isIOS()) {
+        stage = 'flv';
+        void setupFlv(player.tech().el() as HTMLVideoElement, url, true);
+      }
     });
-    art.on('video:playing', () => {
+
+    player.on('playing', () => {
       playbackStarted = true;
       setLoading(false);
       setShowPoster(false);
       setError('');
       // 音量放大：起播后（src 已就绪）才挂增益图。默认关闭时完全不接入；
-      // 跨域直连流会自动跳过，代理/hls.js 的 blob: 源可安全放大；失败一律原样播放。
+      // 跨域直连流会自动跳过，代理/VHS 的 blob: 源可安全放大；失败一律原样播放。
       if (volumeBoostSettingRef.current && !volumeBoostRef.current) {
-        volumeBoostRef.current = attachVolumeBoost(art.video);
+        volumeBoostRef.current = attachVolumeBoost(videoEl);
       }
     });
-    art.on('video:error', () => {
-      // mpegts 走自身 ERROR 事件；这里兜底其它未知错误
-      if (!mpegtsRef.current) setError('视频播放失败，请尝试其他频道');
+
+    player.on('loadedmetadata', () => {
+      if (disposed || destroyed) return;
+      // H.265 检测：大量国内 IPTV 源为 HEVC 编码，Chromium 内核通常无法软解。
+      // VHS 的 manifest 信息里带 CODECS；原生 HLS（iOS Safari）无 VHS，跳过
+      // （Safari 本身能解 HEVC，不提示）。
+      const tech = player.tech(true) as unknown as {
+        vhs?: { playlists?: { media?: () => { attributes?: { CODECS?: string } } } };
+      };
+      const codecs = tech.vhs?.playlists?.media?.()?.attributes?.CODECS ?? '';
+      if (/hvc1|hev1|hevc/i.test(codecs)) {
+        const support = videoEl.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0"');
+        if (!support) {
+          showHint('该频道为 H.265 编码，当前浏览器可能无法解码，建议用 Edge/Safari');
+        }
+      }
     });
-    art.on('ready', () => {
-      // 直播隐藏进度条（ArtPlayer 无原生 isLive 开关）
-      try {
-        const progress = art.controls?.progress as HTMLElement | undefined;
-        if (progress) progress.style.display = 'none';
-      } catch { /* 忽略 */ }
+
+    player.on('error', () => {
+      if (disposed || destroyed) return;
+      // 原生回退与 FLV 阶段的错误各自由 video error 监听 / mpegts ERROR 事件接管
+      if (stage === 'native-fallback' || stage === 'flv') return;
+      if (playbackStarted) {
+        setError('直播流中断，该源可能已失效，请尝试其他频道');
+        return;
+      }
+      if (stage === 'hls-direct') {
+        showHint('直连失败，改用代理重试...');
+        stage = 'hls-proxy';
+        setupHls(proxyUrl(url));
+        return;
+      }
+      if (stage === 'hls-proxy') {
+        // HLS 直连与代理均失败：可能是"无 .m3u8 后缀但内容是 MP4"的源，回退原生播放
+        showHint('HLS 解析失败，尝试原生播放...');
+        stage = 'native-fallback';
+        setupNativeFallback(videoEl, url, true, '直播流加载失败，可能该频道已失效，请尝试其他频道');
+        return;
+      }
+      if (stage === 'native-direct') {
+        showHint('直连失败，改用代理重试...');
+        stage = 'native-proxy';
+        setupNative(proxyUrl(url));
+        return;
+      }
+      if (stage === 'native-proxy') {
+        setError('该地址不是可播放的直播流（内容可能是文件或错误提示）');
+      }
     });
+
+    const engine = engineOf(url);
+    if (engine === 'flv' && isIOS()) {
+      // FLV 依赖 MSE，iOS Safari 没有 MSE 直播能力：明确告知，绝不承诺能播
+      setLoading(false);
+      setError('该频道为 FLV 直播，iOS 设备无法播放 FLV 格式，请切换其他频道');
+    } else if (engine === 'hls') {
+      stage = 'hls-direct';
+      setupHls(url);
+    } else if (engine === 'native') {
+      stage = 'native-direct';
+      setupNative(url);
+    }
+    // FLV（非 iOS）：在 player.ready 回调里挂 mpegts（需 tech 就绪）
 
     // 15s 内未起播则提示
     const startTimer = setTimeout(() => {
@@ -386,21 +444,20 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       cleanupEngines();
       volumeBoostRef.current?.dispose();
       volumeBoostRef.current = null;
-      art.destroy();
-      artRef.current = null;
-      // CONTROL_HIDE_TIME 是全局 static：恢复库默认值，避免影响后续挂载的其它播放器
-      if (touchPointer) Artplayer.CONTROL_HIDE_TIME = ART_DEFAULT_CONTROL_HIDE_MS;
+      player.dispose();
+      playerRef.current = null;
+      videoElRef.current = null;
       destroyed = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, retryNonce, onPrevChannel, onNextChannel]);
 
   // —— 音量放大开关：播放中改设置即时生效，不必等重新起播 ——
   // 关闭走「单位增益直通」而不是拆链：createMediaElementSource 之后元素输出只走
   // 音频图，拆链会永久静音且无法恢复直连，所以只旁路增益与限幅。
   useEffect(() => {
-    const video = artRef.current?.video as HTMLVideoElement | undefined;
-    if (!video) return;
+    const player = playerRef.current;
+    const video = videoElRef.current;
+    if (!player || !video) return;
     if (volumeBoost) {
       volumeBoostRef.current = attachVolumeBoost(video) ?? volumeBoostRef.current;
       volumeBoostRef.current?.setBoost(true);
@@ -411,7 +468,8 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
 
   return (
     <div className="relative w-full h-full">
-      <div ref={containerRef} className="w-full h-full" />
+      {/* Video.js 挂载容器（data-vjs-player 让播放器按容器尺寸填充） */}
+      <div ref={containerRef} data-vjs-player className="w-full h-full" />
       {/* 起播前的品牌占位图 */}
       {showPoster && !error && (
         <div

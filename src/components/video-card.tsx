@@ -141,6 +141,14 @@ export function AggregatedCard({
     remarksList.length > 0 && remarksList.every((label) => label && label === remarksList[0])
       ? remarksList[0]
       : undefined;
+  // 演员/导演搜索（item 4）要在卡片上看得出「为什么命中」：取各源第一条非空值
+  const personLine = useMemo(() => {
+    const actor = sortedItems.find((i) => i.actor)?.actor;
+    const director = sortedItems.find((i) => i.director)?.director;
+    return [actor ? `主演 ${actor}` : '', director ? `导演 ${director}` : '']
+      .filter(Boolean)
+      .join(' · ');
+  }, [sortedItems]);
 
   return (
     <div
@@ -168,6 +176,7 @@ export function AggregatedCard({
               mode={imageProxyMode}
               customProxy={customImageProxy}
               alt={group.name}
+              loading="lazy"
               className="absolute inset-0 h-full w-full object-cover"
               onExhausted={() => setImgFailed(true)}
             />
@@ -210,6 +219,7 @@ export function AggregatedCard({
               )}
             </div>
             <p className="text-xs text-muted line-clamp-2 mb-2">{group.remarks || '暂无介绍'}</p>
+            {personLine && <p className="text-xs text-faint line-clamp-1 mb-1.5">{personLine}</p>}
           </div>
           <div className="flex items-center justify-between gap-1.5 mt-auto pt-1.5 border-t border-line">
             <span className="tag bg-chip text-muted truncate max-w-[80%]">
@@ -360,6 +370,7 @@ export function VideoCard({ item, onClick }: { item: SearchResultItem; onClick: 
               mode={imageProxyMode}
               customProxy={customImageProxy}
               alt={item.name}
+              loading="lazy"
               className="h-full w-full object-cover"
               onExhausted={() => setImgFailed(true)}
             />
@@ -421,6 +432,7 @@ export function DoubanCard({ item, onClick }: { item: { title: string; cover: st
             mode={imageProxyMode}
             customProxy={customImageProxy}
             alt={item.title}
+            loading="lazy"
             className="w-full h-full object-cover"
             onExhausted={() => setImgFailed(true)}
           />

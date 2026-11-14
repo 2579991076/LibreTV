@@ -47,7 +47,7 @@ const status = (over: Partial<AuthStatusResponse> = {}): AuthStatusResponse => (
 });
 
 const payload: SourceListPayload = {
-  name: 'LibreTV-List',
+  name: '源列表',
   sources: [
     { name: '非凡影视', url: 'https://cj.ffzyapi.com/api.php/provide/vod/from/ffm3u8' },
     { name: '如意资源', url: 'https://cj.rycjapi.com/api.php/provide/vod' },
@@ -100,7 +100,7 @@ describe('applyEnvPresets', () => {
   it('预置订阅：拉取并导入源，写入订阅条目与 seen 标记', async () => {
     fetchSourceList.mockResolvedValue(payload);
 
-    await applyEnvPresets(status({ defaultSubscriptions: [{ url: SUB_URL, name: 'LibreTV-List' }] }));
+    await applyEnvPresets(status({ defaultSubscriptions: [{ url: SUB_URL, name: '源列表' }] }));
 
     expect(fetchSourceList).toHaveBeenCalledWith(SUB_URL);
     const s = useAppStore.getState();

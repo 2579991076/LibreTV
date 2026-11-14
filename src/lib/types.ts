@@ -20,6 +20,13 @@ export interface SearchResultItem {
   year?: string;
   area?: string;
   remarks?: string;
+  /**
+   * 演员（源站原样，逗号分隔）、导演。
+   * ac=videolist 返回全字段，含 vod_actor / vod_director；解析后随搜索结果返回，
+   * 供按演员/导演匹配与展示。详情接口（parseDetail）早已解析这两个字段。
+   */
+  actor?: string;
+  director?: string;
   /** 自定义源的 API 地址，详情请求需要 */
   sourceUrl?: string;
   isAdult?: boolean;
@@ -226,7 +233,7 @@ export interface SubscriptionParseStats {
 /**
  * 远程订阅解析结果。
  * `sources` 为点播源（Apple CMS 采集站），`liveSources` 为直播源（M3U + 可选 EPG）。
- * 兼容三种订阅格式：LibreTV-SourceList JSON、TVBOX 配置 JSON（`sites` / `lives`）、
+ * 兼容三种订阅格式：源源の放映室-SourceList JSON、TVBOX 配置 JSON（`sites` / `lives`）、
  * 接口目录（裸数组 `{name, baseUrl, enabled}`，仅点播）。
  * 老格式订阅只有 `sources`，此时 `liveSources` 为空数组。
  */
