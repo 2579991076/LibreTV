@@ -5,7 +5,6 @@ import videojs from 'video.js';
 import 'video.js/dist/video-js.css';
 
 import { PlaybackRecovery, describeHlsError } from '@/lib/playback-recovery';
-import { installVhsAdFilter, setVhsAdFilterEnabled } from '@/lib/vhs-ad-filter';
 import { installIOSFullscreenOverride } from '@/lib/videojs-ios-fullscreen';
 import {
   getVideoPrefetcher,
@@ -56,8 +55,7 @@ function sourceTypeOf(url: string): { src: string; type: string } {
 
 /**
  * 是否走系统原生 HLS（iOS/macOS Safari）：原生播放时清单由浏览器直接拉，
- * 不经过 VHS xhr，播放器侧的去广告（vhs-ad-filter）拦不住；这类浏览器去
- * 广告开着时改走代理拿清单，让服务端先把广告段删干净（分片仍直连）。
+ * 不经过 VHS；这类浏览器去广告开着时改走代理拿清单，让服务端先把广告段删干净（分片仍直连）。
  * canPlayType 在 iOS/macOS Safari 上对 mpegurl 返回 probably/maybe，
  * 在 Chrome/Firefox 上返回空串。
  */
@@ -711,9 +709,6 @@ export function PlayerShell({
     if (!containerRef.current || !propsRef.current.url) return;
     const initialUrl = propsRef.current.url;
 
-    // 广告过滤装到 VHS 全局 xhr（幂等，必须在建播放器之前）
-    installVhsAdFilter();
-    setVhsAdFilterEnabled(propsRef.current.adFilter);
     // 画质菜单组件注册一次
     registerQualityComponents();
 
@@ -1474,7 +1469,6 @@ export function PlayerShell({
       videoEl.removeEventListener('resize', reportVideoHeight);
       restoreCleanupRef.current?.();
       restoreCleanupRef.current = null;
-      setVhsAdFilterEnabled(false);
       recoveryRef.current?.dispose();
       getVideoPrefetcher().stop();
       // 播放页可能仍持有读取接口：销毁前显式置空，避免「记录当前」读到已销毁实例
@@ -1544,7 +1538,6 @@ export function PlayerShell({
   const firstAdFilterRef = useRef(true);
   useEffect(() => {
     if (firstAdFilterRef.current) { firstAdFilterRef.current = false; return; }
-    setVhsAdFilterEnabled(adFilter);
     if (playerRef.current) {
       // 用当前实际媒体地址：代理回退生效时切广告过滤不应跳回直连形式
       loadEpisode(currentMediaUrlRef.current || propsRef.current.url);

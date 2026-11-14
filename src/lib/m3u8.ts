@@ -372,8 +372,7 @@ export function stripAdGroups(m3u8Content: string, baseUrl?: string): string {
 
 /**
  * 删广告 + 直连（供 iOS/macOS 原生 HLS 用）。
- * 原生 HLS 不走 VHS xhr，播放器侧的去广告（vhs-ad-filter）拦不住；改由
- * 代理在服务端先把广告段删掉，再把剩余地址写成绝对直连地址（不走代理），
+ * 原生 HLS 不走 VHS，改由代理在服务端先把广告段删掉，再把剩余地址写成绝对直连地址（不走代理），
  * 分片/key 仍由浏览器直接从片源拉，不额外烧代理额度。
  * 例外：变体分清单（#EXT-X-STREAM-INF 下一行，或地址本身是 .m3u8）
  * 仍走代理删广告——多码率源的主清单本身没有广告段，广告在分清单里；
