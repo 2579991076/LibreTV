@@ -53,6 +53,36 @@ function sourceTypeOf(url: string): { src: string; type: string } {
   return { src: url, type: 'application/x-mpegURL' };
 }
 
+/**
+ * 是否走系统原生 HLS（iOS/macOS Safari）：原生播放时清单由浏览器直接拉，
+ * 不经过 VHS xhr，播放器侧的去广告（vhs-ad-filter）拦不住；这类浏览器去
+ * 广告开着时改走代理拿清单，让服务端先把广告段删干净（分片仍直连）。
+ * canPlayType 在 iOS/macOS Safari 上对 mpegurl 返回 probably/maybe，
+ * 在 Chrome/Firefox 上返回空串。
+ */
+let nativeHlsCache: boolean | null = null;
+function supportsNativeHls(): boolean {
+  if (nativeHlsCache !== null) return nativeHlsCache;
+  try {
+    const v = document.createElement('video');
+    nativeHlsCache = v.canPlayType('application/vnd.apple.mpegurl') !== '';
+  } catch {
+    nativeHlsCache = false;
+  }
+  return nativeHlsCache;
+}
+
+/** 从代理地址里反解出原始直连地址（stripAds 代理失败时的兜底用）；非代理地址原样返回 */
+function originalDirectUrl(url: string): string {
+  if (!url.startsWith('/api/proxy')) return url;
+  try {
+    const inner = new URL(url, window.location.origin).searchParams.get('url');
+    return inner || url;
+  } catch {
+    return url;
+  }
+}
+
 /** 画质菜单：VHS qualityLevels 的封装。iOS 原生 HLS 下 qualityLevels 为空，只显示「自动」。 */
 let qualityComponentsRegistered = false;
 function registerQualityComponents(): void {
@@ -527,12 +557,22 @@ export function PlayerShell({
    * 代理兜底（直连致命网络错误时改走 /api/proxy）不在这里，由 error 事件的
    * 恢复策略决定后显式传入代理地址再调 setupSource。
    */
-  const setupSource = (mediaUrl: string) => {
+  const setupSource = (mediaUrl: string, opts?: { forceDirect?: boolean }) => {
     const player = playerRef.current;
     if (!player) return;
     restoreCleanupRef.current?.();
     restoreCleanupRef.current = null;
-    currentMediaUrlRef.current = mediaUrl;
+    // 原生 HLS + 去广告开着：清单走代理删广告（分片仍直连）；已是代理地址不重复包
+    let effectiveUrl = mediaUrl;
+    if (
+      !opts?.forceDirect &&
+      propsRef.current.adFilter &&
+      !mediaUrl.startsWith('/api/proxy') &&
+      supportsNativeHls()
+    ) {
+      effectiveUrl = `/api/proxy?url=${encodeURIComponent(mediaUrl)}&stripAds=1`;
+    }
+    currentMediaUrlRef.current = effectiveUrl;
     // 换源时重置恢复策略（直连/代理两级共享计数由 loadEpisode 在集间重置）
     if (!recoveryRef.current) recoveryRef.current = new PlaybackRecovery();
 
@@ -554,7 +594,7 @@ export function PlayerShell({
         restoredRef.current = true;
         restoreCleanupRef.current?.();
         restoreCleanupRef.current = null;
-        ensurePrefetch(mediaUrl, prefetchAnchor);
+        ensurePrefetch(effectiveUrl, prefetchAnchor);
         // 快速起播：源就绪后立即播放，边播边缓冲，不等预取
         player.play()?.catch(() => {});
       } catch {
@@ -591,7 +631,7 @@ export function PlayerShell({
       }
     });
 
-    player.src(sourceTypeOf(mediaUrl));
+    player.src(sourceTypeOf(effectiveUrl));
     // 快速起播：不等清单解析完，先把播放请求发出（autoplay 由 Video.js 处理）
     player.play()?.catch(() => {});
   };
@@ -1063,6 +1103,19 @@ export function PlayerShell({
         case 'ignore':
           break;
         case 'retry': {
+          // stripAds 代理清单失败 → 兜底回直连（有广告但能播），不再重复包代理
+          if (
+            details === 'manifestLoadError' &&
+            currentMediaUrlRef.current.startsWith('/api/proxy') &&
+            currentMediaUrlRef.current.includes('stripAds=1')
+          ) {
+            const direct = originalDirectUrl(currentMediaUrlRef.current);
+            if (direct !== currentMediaUrlRef.current) {
+              showHint('代理去广告失败，改用直连播放...');
+              setupSource(direct, { forceDirect: true });
+              return;
+            }
+          }
           // 前两次重试保留直连；达到退避阈值或清单级错误时升级为代理形式
           // （同源 cookie 鉴权，规避 CORS/防盗链/分片被拒）
           if (

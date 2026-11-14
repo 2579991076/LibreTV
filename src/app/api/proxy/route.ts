@@ -9,7 +9,10 @@ export const runtime = 'nodejs';
  * 全平台行为一致；旧路径形式 /api/proxy/<encoded> 仍由 [url] 路由兼容。
  */
 export async function GET(req: Request) {
-  const targetUrl = new URL(req.url).searchParams.get('url');
+  const params = new URL(req.url).searchParams;
+  const targetUrl = params.get('url');
   if (!targetUrl) return new NextResponse('缺少 url 参数', { status: 400 });
-  return handleProxyRequest(req, targetUrl);
+  // stripAds=1：iOS 原生 HLS 专用，代理在服务端先删广告段（分片仍直连）
+  const stripAds = params.get('stripAds') === '1';
+  return handleProxyRequest(req, targetUrl, { stripAds });
 }

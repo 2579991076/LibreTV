@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { guardRequest, jsonError } from '@/lib/api-guard';
 import { checkLiveUrlAllowed, isBlockedByDNS, isValidProxyUrl } from '@/lib/ssrf';
 import { fetchWithSafeRedirects } from '@/lib/fetch-utils';
-import { rewriteM3u8, LIVE_STREAM_BASE } from '@/lib/m3u8';
+import { rewriteM3u8, stripAdsDirectM3u8, LIVE_STREAM_BASE } from '@/lib/m3u8';
 
 /**
  * 代理目标地址的两种传入形式：
@@ -68,7 +68,11 @@ export function decodePathTarget(encodedUrl: string): string {
  * - 未登录仅放行图片目标（豆瓣封面等），且同样受 SSRF 防护约束；
  * - m3u8 文本重写为代理地址，分片/key/map 全部经本站转发，规避上游 CORS。
  */
-export async function handleProxyRequest(req: Request, targetUrl: string): Promise<Response> {
+export async function handleProxyRequest(
+  req: Request,
+  targetUrl: string,
+  opts?: { stripAds?: boolean }
+): Promise<Response> {
   const guarded = guardRequest(req);
   if (guarded && !looksLikeImageUrl(targetUrl)) return guarded;
 
@@ -124,9 +128,12 @@ export async function handleProxyRequest(req: Request, targetUrl: string): Promi
     targetUrl.toLowerCase().endsWith('.m3u8');
 
   // m3u8 文本：重写为代理地址（以重定向后的最终 URL 为 base 解析相对地址）
+  // stripAds=1（iOS 原生 HLS 专用）：先删广告段，再把剩余地址写成绝对直连，
+  // 分片仍由浏览器直连片源，不走代理（不烧额度）。
   if (isM3u8) {
     const text = await response.text();
-    return new NextResponse(rewriteM3u8(text, finalUrl), {
+    const body = opts?.stripAds ? stripAdsDirectM3u8(text, finalUrl) : rewriteM3u8(text, finalUrl);
+    return new NextResponse(body, {
       status: response.status,
       headers: {
         'Content-Type': 'application/vnd.apple.mpegurl',

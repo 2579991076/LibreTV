@@ -369,3 +369,26 @@ export function stripAdGroups(m3u8Content: string, baseUrl?: string): string {
   if (!m3u8Content) return '';
   return stripCrossDomainSegments(stripLeadingDisc(stripLeadAdGroup(stripInterstitialAdGroups(stripMarkedAdGroups(m3u8Content)))), baseUrl);
 }
+
+/**
+ * 删广告 + 直连（供 iOS/macOS 原生 HLS 用）。
+ * 原生 HLS 不走 VHS xhr，播放器侧的去广告（vhs-ad-filter）拦不住；改由
+ * 代理在服务端先把广告段删掉，再把剩余地址写成绝对直连地址（不走代理），
+ * 分片/key 仍由浏览器直接从片源拉，不额外烧代理额度。
+ */
+export function stripAdsDirectM3u8(content: string, baseUrl: string): string {
+  const cleaned = stripAdGroups(content, baseUrl);
+  const lines = cleaned.split('\n');
+  const out = lines.map((line) => {
+    if (URI_ATTR_TAGS.some((tag) => line.startsWith(tag))) {
+      return line.replace(/(URI=")([^"]+)(")/g, (m, p1: string, uri: string, p2: string) => {
+        if (isProxiedUri(uri)) return m;
+        return p1 + makeAbsolute(uri, baseUrl) + p2;
+      });
+    }
+    if (line.startsWith('#') || line.trim() === '') return line;
+    if (isProxiedUri(line)) return line;
+    return makeAbsolute(line, baseUrl);
+  });
+  return out.join('\n');
+}
