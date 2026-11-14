@@ -6,6 +6,7 @@ import 'video.js/dist/video-js.css';
 import type Mpegts from 'mpegts.js';
 import { Spinner } from './states';
 import { attachVolumeBoost, type VolumeBoostHandle } from '@/lib/volume-boost';
+import { installIOSFullscreenOverride } from '@/lib/videojs-ios-fullscreen';
 
 /**
  * 直播播放器：与点播 player-shell 完全独立，基于 Video.js 8。
@@ -277,54 +278,9 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
     });
     playerRef.current = player;
 
-    // —— iOS 全屏默认横屏：竖屏时走 Video.js 的 enterFullWindow（网页全屏铺满视口）
-    // + CSS 旋转 90°（globals.css 里 body.vjs-full-window 的 portrait 规则），
-    // 点全屏就横屏，不用关竖屏锁定；横屏时走原生 webkitEnterFullscreen。
-    {
-      type NativeFSVideo = HTMLVideoElement & {
-        webkitEnterFullscreen?: () => void;
-        webkitExitFullScreen?: () => void;
-        webkitDisplayingFullscreen?: boolean;
-      };
-      type NativeFSTech = { enterFullScreen?: () => void; exitFullScreen?: () => void };
-      const nativeVideo = videoEl as NativeFSVideo;
-      const nativeTech = () => player.tech() as unknown as NativeFSTech | null;
-      const hasNativeFullscreen = () => typeof nativeVideo.webkitEnterFullscreen === 'function';
-      const isIOSPortrait = () =>
-        hasNativeFullscreen() && window.matchMedia('(orientation: portrait)').matches;
-      const origRequestFullscreen = player.requestFullscreen.bind(player);
-      const origExitFullscreen = player.exitFullscreen.bind(player);
-      player.requestFullscreen = ((options) => {
-        if (isIOSPortrait()) {
-          player.enterFullWindow();
-          return Promise.resolve();
-        }
-        if (hasNativeFullscreen()) {
-          try {
-            nativeTech()?.enterFullScreen?.();
-            return Promise.resolve();
-          } catch {
-            /* 失败则走标准路径 */
-          }
-        }
-        return origRequestFullscreen(options);
-      }) as typeof player.requestFullscreen;
-      player.exitFullscreen = (() => {
-        if (player.isFullWindow) {
-          player.exitFullWindow();
-          return Promise.resolve();
-        }
-        if (hasNativeFullscreen() && nativeVideo.webkitDisplayingFullscreen) {
-          try {
-            nativeTech()?.exitFullScreen?.();
-            return Promise.resolve();
-          } catch {
-            /* 失败则走标准路径 */
-          }
-        }
-        return origExitFullscreen();
-      }) as typeof player.exitFullscreen;
-    }
+    // iOS 全屏默认横屏（竖屏走网页全屏 + CSS 旋转 90°，横屏走原生全屏），
+    // 与点播 player-shell 共用同一份逻辑（见 lib/videojs-ios-fullscreen）。
+    installIOSFullscreenOverride(player, videoEl);
 
     // 上一台/下一台：注册到控制条最左侧（普通态与全屏均可见），未传不显示
     const channelBtnSvg = (path: string) =>

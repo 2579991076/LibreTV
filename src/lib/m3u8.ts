@@ -375,20 +375,44 @@ export function stripAdGroups(m3u8Content: string, baseUrl?: string): string {
  * 原生 HLS 不走 VHS xhr，播放器侧的去广告（vhs-ad-filter）拦不住；改由
  * 代理在服务端先把广告段删掉，再把剩余地址写成绝对直连地址（不走代理），
  * 分片/key 仍由浏览器直接从片源拉，不额外烧代理额度。
+ * 例外：变体分清单（#EXT-X-STREAM-INF 下一行，或地址本身是 .m3u8）
+ * 仍走代理删广告——多码率源的主清单本身没有广告段，广告在分清单里；
+ * 分清单走代理也只是多一次几 KB 的文本请求，分片仍直连。
  */
 export function stripAdsDirectM3u8(content: string, baseUrl: string): string {
   const cleaned = stripAdGroups(content, baseUrl);
   const lines = cleaned.split('\n');
-  const out = lines.map((line) => {
+  // 变体分清单走代理删广告，其余（分片/key/初始化段）绝对直连
+  const directOrProxy = (abs: string, isPlaylist: boolean): string => {
+    if (isPlaylist) return `${PROXY_BASE}${encodeURIComponent(abs)}&stripAds=1`;
+    return abs;
+  };
+  const isPlaylistUrl = (abs: string): boolean => /\.m3u8(\?|$)/i.test(abs);
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const prev = i > 0 ? lines[i - 1] : '';
+    const prevIsStreamInf = prev.startsWith('#EXT-X-STREAM-INF');
     if (URI_ATTR_TAGS.some((tag) => line.startsWith(tag))) {
-      return line.replace(/(URI=")([^"]+)(")/g, (m, p1: string, uri: string, p2: string) => {
-        if (isProxiedUri(uri)) return m;
-        return p1 + makeAbsolute(uri, baseUrl) + p2;
-      });
+      out.push(
+        line.replace(/(URI=")([^"]+)(")/g, (m, p1: string, uri: string, p2: string) => {
+          if (isProxiedUri(uri)) return m;
+          const abs = makeAbsolute(uri, baseUrl);
+          return p1 + directOrProxy(abs, isPlaylistUrl(abs)) + p2;
+        })
+      );
+      continue;
     }
-    if (line.startsWith('#') || line.trim() === '') return line;
-    if (isProxiedUri(line)) return line;
-    return makeAbsolute(line, baseUrl);
-  });
+    if (line.startsWith('#') || line.trim() === '') {
+      out.push(line);
+      continue;
+    }
+    if (isProxiedUri(line)) {
+      out.push(line);
+      continue;
+    }
+    const abs = makeAbsolute(line, baseUrl);
+    out.push(directOrProxy(abs, prevIsStreamInf || isPlaylistUrl(abs)));
+  }
   return out.join('\n');
 }

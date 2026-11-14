@@ -6,6 +6,7 @@ import 'video.js/dist/video-js.css';
 
 import { PlaybackRecovery, describeHlsError } from '@/lib/playback-recovery';
 import { installVhsAdFilter, setVhsAdFilterEnabled } from '@/lib/vhs-ad-filter';
+import { installIOSFullscreenOverride } from '@/lib/videojs-ios-fullscreen';
 import {
   getVideoPrefetcher,
   getNextEpisodePrefetcher,
@@ -379,6 +380,9 @@ export function PlayerShell({
   const ensurePrefetch = (mediaUrl: string, currentTime: number, horizonSeconds?: number) => {
     const p = propsRef.current;
     if (!p.episodeKey) return;
+    // 原生 HLS（iOS/macOS Safari）：播放器不读预取缓存（VHS 不走、原生播放器
+    // 自己拉分片），预取等于重复下载，跳过。
+    if (supportsNativeHls()) return;
     getVideoPrefetcher().ensure({
       m3u8Url: mediaUrl,
       currentTime,
@@ -562,12 +566,15 @@ export function PlayerShell({
     if (!player) return;
     restoreCleanupRef.current?.();
     restoreCleanupRef.current = null;
-    // 原生 HLS + 去广告开着：清单走代理删广告（分片仍直连）；已是代理地址不重复包
+    // 原生 HLS + 去广告开着：清单走代理删广告（分片仍直连）；已是代理地址不重复包。
+    // 只包 HLS 清单：mp4/webm 等直连容器不走代理（否则整段视频数据都过 Netlify，
+    // 又慢又烧额度），去广告对它们也没有意义。
     let effectiveUrl = mediaUrl;
     if (
       !opts?.forceDirect &&
       propsRef.current.adFilter &&
       !mediaUrl.startsWith('/api/proxy') &&
+      sourceTypeOf(mediaUrl).type === 'application/x-mpegURL' &&
       supportsNativeHls()
     ) {
       effectiveUrl = `/api/proxy?url=${encodeURIComponent(mediaUrl)}&stripAds=1`;
@@ -774,58 +781,9 @@ export function PlayerShell({
     });
     playerRef.current = player;
 
-    // —— iOS 全屏默认横屏：iPhone 上标准 Fullscreen API 只会按当前朝向（竖屏）铺满，
-    // 不会跟随手机转横屏；网页也无法像原生 App 那样强制转屏。
-    // 竖屏时改走 Video.js 的 enterFullWindow（网页全屏铺满视口）+ CSS 旋转 90°
-    //（globals.css 里 body.vjs-full-window 的 portrait 规则），点全屏就横屏，
-    // 不用关竖屏锁定；横屏时走原生 webkitEnterFullscreen。
-    // Video.js 优先走标准 API，这里在 iOS 上按朝向分流。
-    {
-      type NativeFSVideo = HTMLVideoElement & {
-        webkitEnterFullscreen?: () => void;
-        webkitExitFullScreen?: () => void;
-        webkitDisplayingFullscreen?: boolean;
-      };
-      type NativeFSTech = { enterFullScreen?: () => void; exitFullScreen?: () => void };
-      const nativeVideo = videoEl as NativeFSVideo;
-      const nativeTech = () => player.tech() as unknown as NativeFSTech | null;
-      const hasNativeFullscreen = () => typeof nativeVideo.webkitEnterFullscreen === 'function';
-      const isIOSPortrait = () =>
-        hasNativeFullscreen() && window.matchMedia('(orientation: portrait)').matches;
-      const origRequestFullscreen = player.requestFullscreen.bind(player);
-      const origExitFullscreen = player.exitFullscreen.bind(player);
-      player.requestFullscreen = ((options) => {
-        if (isIOSPortrait()) {
-          // 竖屏：网页全屏 + CSS 旋转 90°，默认横屏，不用关竖屏锁定
-          player.enterFullWindow();
-          return Promise.resolve();
-        }
-        if (hasNativeFullscreen()) {
-          try {
-            nativeTech()?.enterFullScreen?.();
-            return Promise.resolve();
-          } catch {
-            /* 失败则走标准路径 */
-          }
-        }
-        return origRequestFullscreen(options);
-      }) as typeof player.requestFullscreen;
-      player.exitFullscreen = (() => {
-        if (player.isFullWindow) {
-          player.exitFullWindow();
-          return Promise.resolve();
-        }
-        if (hasNativeFullscreen() && nativeVideo.webkitDisplayingFullscreen) {
-          try {
-            nativeTech()?.exitFullScreen?.();
-            return Promise.resolve();
-          } catch {
-            /* 失败则走标准路径 */
-          }
-        }
-        return origExitFullscreen();
-      }) as typeof player.exitFullscreen;
-    }
+    // iOS 全屏默认横屏（竖屏走网页全屏 + CSS 旋转 90°，横屏走原生全屏），
+    // 与直播 live-player 共用同一份逻辑（见 lib/videojs-ios-fullscreen）。
+    installIOSFullscreenOverride(player, videoEl);
 
     // —— 控制条自定义按钮 ——
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

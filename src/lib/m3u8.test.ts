@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { parseM3u8Playlist } from './m3u8-parse';
-import { isProxiedUri, rewriteM3u8, stripAdGroups, stripLeadAdGroup } from './m3u8';
+import { isProxiedUri, rewriteM3u8, stripAdGroups, stripAdsDirectM3u8, stripLeadAdGroup } from './m3u8';
 
 const BASE = 'https://cdn.example.com/live/index.m3u8';
 
@@ -64,6 +64,57 @@ describe('rewriteM3u8', () => {
   it('超过递归深度限制时原样返回', () => {
     const input = 'https://a.ts';
     expect(rewriteM3u8(input, BASE, 6)).toBe(input);
+  });
+});
+
+describe('stripAdsDirectM3u8', () => {
+  it('媒体清单：分片与 key 写成绝对直连（不走代理），不烧代理额度', () => {
+    const input = [
+      '#EXTM3U',
+      '#EXT-X-VERSION:3',
+      '#EXT-X-TARGETDURATION:10',
+      '#EXT-X-KEY:METHOD=AES-128,URI="key.bin"',
+      '#EXTINF:10,',
+      'seg1.ts',
+      '#EXTINF:10,',
+      'seg2.ts',
+      '#EXT-X-ENDLIST',
+    ].join('\n');
+    const out = stripAdsDirectM3u8(input, BASE);
+    expect(out).toContain('URI="https://cdn.example.com/live/key.bin"');
+    expect(out).toContain('https://cdn.example.com/live/seg1.ts');
+    expect(out).toContain('https://cdn.example.com/live/seg2.ts');
+    expect(out).not.toContain('/api/proxy');
+  });
+
+  it('主清单：变体分清单走代理删广告（带 stripAds=1），分片仍直连', () => {
+    const input = [
+      '#EXTM3U',
+      '#EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=1280x720',
+      '720p.m3u8',
+      '#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=854x480',
+      '480p.m3u8',
+      '#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=640x360',
+      'https://cdn.example.com/live/360p.m3u8?token=abc',
+    ].join('\n');
+    const out = stripAdsDirectM3u8(input, BASE);
+    expect(out).toContain('/api/proxy?url=' + encodeURIComponent('https://cdn.example.com/live/720p.m3u8') + '&stripAds=1');
+    expect(out).toContain('/api/proxy?url=' + encodeURIComponent('https://cdn.example.com/live/480p.m3u8') + '&stripAds=1');
+    expect(out).toContain('/api/proxy?url=' + encodeURIComponent('https://cdn.example.com/live/360p.m3u8?token=abc') + '&stripAds=1');
+  });
+
+  it('I 帧分清单 URI（.m3u8）走代理，key（.bin）直连', () => {
+    const input = [
+      '#EXTM3U',
+      '#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=86000,URI="iframe.m3u8"',
+      '#EXT-X-KEY:METHOD=AES-128,URI="https://cdn.example.com/key.bin"',
+      '#EXTINF:10,',
+      'seg1.ts',
+    ].join('\n');
+    const out = stripAdsDirectM3u8(input, BASE);
+    expect(out).toContain('URI="/api/proxy?url=' + encodeURIComponent('https://cdn.example.com/live/iframe.m3u8') + '&stripAds=1"');
+    expect(out).toContain('URI="https://cdn.example.com/key.bin"');
+    expect(out).toContain('https://cdn.example.com/live/seg1.ts');
   });
 });
 
