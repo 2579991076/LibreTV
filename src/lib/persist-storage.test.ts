@@ -59,7 +59,7 @@ beforeEach(() => {
     customAPIs: sources,
     selectedKeys: sources.map((source) => source.key),
     sourceHealth: {},
-    adFilter: true,
+    yellowFilter: true,
   } }));
 });
 
@@ -100,12 +100,12 @@ describe('多标签配置持久化', () => {
   it('页面卸载前的 flush 也不能复活另一标签已删除的源', async () => {
     const a = await openTab();
     const b = await openTab();
-    a.store.getState().updateSettings({ adFilter: false });
+    a.store.getState().updateSettings({ yellowFilter: false });
     b.store.getState().removeCustomApi('custom_0');
     b.flush();
     a.unload();
     expect(saved().customAPIs).toEqual([sources[1]]);
-    expect(saved().adFilter).toBe(false);
+    expect(saved().yellowFilter).toBe(false);
   });
 
   it('外部 storage 通知恢复内存配置，且不会触发回写循环', async () => {
@@ -123,14 +123,14 @@ describe('多标签配置持久化', () => {
   it('收到外部配置时保留本标签尚未落盘的修改', async () => {
     const a = await openTab();
     const b = await openTab();
-    a.store.getState().updateSettings({ adFilter: false });
+    a.store.getState().updateSettings({ yellowFilter: false });
     b.store.getState().addCustomApi(added);
     b.flush();
     a.notify();
-    expect(a.store.getState().adFilter).toBe(false);
+    expect(a.store.getState().yellowFilter).toBe(false);
     expect(a.store.getState().customAPIs).toHaveLength(3);
     a.flush();
-    expect(saved().adFilter).toBe(false);
+    expect(saved().yellowFilter).toBe(false);
     expect(saved().customAPIs).toHaveLength(3);
   });
 
@@ -139,7 +139,7 @@ describe('多标签配置持久化', () => {
     a.storage.setItem(KEY, JSON.stringify({ version: 8, state: {
       customAPIs: [{ key: 'imported', name: '导入源', url: 'https://import.example/api' }],
       selectedKeys: ['imported'],
-      adFilter: true,
+      yellowFilter: true,
       sourceHealth: {},
     } }));
     a.store.getState().recordSourceHealth([{ sourceKey: 'custom_0', ok: true, ms: 100, list: [] }]);
@@ -162,11 +162,11 @@ describe('多标签配置持久化', () => {
   it('两标签分别修改不同偏好时，两项操作都持久化', async () => {
     const a = await openTab();
     const b = await openTab();
-    a.store.getState().updateSettings({ adFilter: false });
+    a.store.getState().updateSettings({ yellowFilter: false });
     b.store.getState().updateSettings({ autoplayNext: false });
     b.flush();
     a.flush();
-    expect(saved().adFilter).toBe(false);
+    expect(saved().yellowFilter).toBe(false);
     expect(saved().autoplayNext).toBe(false);
     expect(a.store.getState().autoplayNext).toBe(false);
   });
@@ -201,7 +201,7 @@ describe('多标签配置持久化', () => {
     const b = await openTab();
     b.store.getState().addCustomApi(added);
     b.flush();
-    a.store.getState().updateSettings({ adFilter: false });
+    a.store.getState().updateSettings({ yellowFilter: false });
     a.flush();
     a.store.getState().updateSettings({ autoplayNext: false });
     a.flush();
@@ -212,7 +212,7 @@ describe('多标签配置持久化', () => {
   it('重复 rehydrate 不丢待写偏好，也不把远端源误判为本地删除', async () => {
     const a = await openTab();
     const b = await openTab();
-    a.store.getState().updateSettings({ adFilter: false });
+    a.store.getState().updateSettings({ yellowFilter: false });
     b.store.getState().addCustomApi(added);
     b.flush();
     await a.store.persist.rehydrate();
@@ -220,7 +220,7 @@ describe('多标签配置持久化', () => {
     a.store.getState().updateSettings({ autoplayNext: false });
     a.flush();
     expect(saved().customAPIs).toHaveLength(3);
-    expect(saved().adFilter).toBe(false);
+    expect(saved().yellowFilter).toBe(false);
     expect(saved().autoplayNext).toBe(false);
   });
 
@@ -247,13 +247,13 @@ describe('多标签配置持久化', () => {
 
   it('无法读取最新存储时不使用不完整差异覆盖原配置', async () => {
     const a = await openTab();
-    a.store.getState().updateSettings({ adFilter: false });
+    a.store.getState().updateSettings({ yellowFilter: false });
     const fail = vi.spyOn(a.storage, 'getItem').mockImplementationOnce(() => { throw new Error('denied'); });
     expect(() => a.flush()).not.toThrow();
     expect(saved().customAPIs).toEqual(sources);
-    expect(saved().adFilter).toBe(true);
+    expect(saved().yellowFilter).toBe(true);
     a.flush();
-    expect(saved().adFilter).toBe(false);
+    expect(saved().yellowFilter).toBe(false);
     fail.mockRestore();
   });
 
