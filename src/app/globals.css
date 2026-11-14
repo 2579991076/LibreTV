@@ -187,9 +187,9 @@ body {
 
 /*
  * Video.js 播放器主题（源源の放映室，品牌蓝 #2563eb）。
- * 旧版 ArtPlayer 的 .art-control-* 窄屏收起规则与 .libretv-rotate-landscape
- * 旋转 hack 已随播放器替换一并删除：全屏改走 Video.js 原生全屏，
- * 不再用 fullscreenWeb + CSS 旋转 90°。
+ * 旧版 ArtPlayer 的 .art-control-* 窄屏收起规则已随播放器替换删除。
+ * 竖屏全屏旋转（.libretv-rotate-landscape 的等价实现）保留：见下方
+ * body.vjs-full-window 规则——iOS 网页点全屏默认横屏，不用关竖屏锁定。
  */
 /* 主题色：进度已播部分、音量条、加载圈 */
 .libretv-videojs .vjs-play-progress,
@@ -218,6 +218,22 @@ body {
    这里只保证它盖在控制栏之下、不拦截触摸 */
 .libretv-videojs .vjs-control-bar {
   z-index: 2;
+}
+
+/*
+ * iOS 竖屏下点全屏默认横屏：iOS Safari 不支持 screen.orientation.lock，
+ * 网页也无法像原生 App 那样强制转屏；改用 CSS 把网页全屏（enterFullWindow）
+ * 的播放器旋转 90° 放满屏。只在竖屏生效，横屏时不旋转；
+ * 退出全屏时自动复原。竖屏锁定开着也能用，点全屏就横屏。
+ */
+@media (orientation: portrait) {
+  body.vjs-full-window .video-js.vjs-fullscreen {
+    width: 100vh !important;
+    height: 100vw !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%) rotate(90deg) !important;
+  }
 }
 
 /*
