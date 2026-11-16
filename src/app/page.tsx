@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/header';
 import { RecommendSection } from '@/components/douban-section';
 import { DetailModal } from '@/components/detail-modal';
+import { ContinueWatching } from '@/components/continue-watching';
 import { AggregatedCard, aggregateResults } from '@/components/video-card';
 import { useAppStore, resolveSource, isInDisabledSubscription, isSourceDisabled } from '@/lib/store';
 import { api } from '@/lib/client-api';
@@ -169,6 +170,9 @@ function HomeContent() {
       <Header />
 
       <main className="relative flex-1 max-w-6xl w-full mx-auto px-4 py-6">
+        {/* 继续观看：首页最顶部，无历史时不渲染 */}
+        <ContinueWatching />
+
         {/* 首屏氛围渐变 */}
         {!urlQuery && (
           <div
