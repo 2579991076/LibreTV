@@ -486,6 +486,10 @@ export function PlayerShell({
       aspectRatio: true,
       fullscreen: false,
       fullscreenWeb: true,
+      // 竖屏全屏的旋转交给库自带的 autoOrientation：它自己转 90°、自己置 isRotate，
+      // 快进的竖向算法就是按它自己的旋转几何写的，两边天生对得上，不用站里再同步。
+      // 站里原来的 CSS 旋转 + 同步补丁已删（那套在手机上没修好）。
+      autoOrientation: true,
       // 恒传 true，不跟设置项走：库的 miniProgressBar 插件只在构造时注册、运行时不可换，
       // 而它正是「控制栏显示时摘掉 art-mini-progress-bar」的唯一维护者。设置项只负责
       // 「关掉时不保留类名」（见下方 control 监听 + 开关变化的 useEffect）。
@@ -557,12 +561,9 @@ export function PlayerShell({
     // 全屏切换 / 播放器尺寸变化会重建控件，色带随之被清掉，这里补一次重绘
     art.on('fullscreen', renderSkipMarks);
     art.on('fullscreenWeb', renderSkipMarks);
-    // 竖屏下点「网页全屏」时横屏放大：iOS 不支持 orientation.lock，改用 CSS 把播放器旋转 90°。
-    // 类名只标记「正在网页全屏」，是否旋转由 globals.css 里的 portrait 媒体查询决定；
-    // 退出全屏或转回横屏时自动复原。
-    art.on('fullscreenWeb', (state: boolean) => {
-      art.template?.$player?.classList.toggle('libretv-rotate-landscape', state);
-    });
+    // 竖屏全屏的旋转由库的 autoOrientation 接管（配置里已开），不再由站里 CSS 转、
+    // 不再同步 isRotate。注意：库只在进全屏那一刻算一次，中途转手机它不管，
+    // 画面会歪一下——这是换掉整套补丁要接受的小退化。
     art.on('resize', renderSkipMarks);
 
     /**
