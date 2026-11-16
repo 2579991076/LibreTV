@@ -560,9 +560,29 @@ export function PlayerShell({
     // 竖屏下点「网页全屏」时横屏放大：iOS 不支持 orientation.lock，改用 CSS 把播放器旋转 90°。
     // 类名只标记「正在网页全屏」，是否旋转由 globals.css 里的 portrait 媒体查询决定；
     // 退出全屏或转回横屏时自动复原。
+    //
+    // 同步库的 isRotate：本站没开 ArtPlayer 的 autoOrientation 插件（默认 false），
+    // 所以库不知道播放器被转了 90°，进度条仍按横向（clientX）算位置——竖屏全屏下
+    // 进度条在屏幕上是竖的，横向几乎没有行程，点按/拖动都算在开头附近，快进快退
+    // 就失效了。库的竖向分支（clientY / 视觉高度）只认 isRotate，这里按 CSS 旋转
+    // 是否实际生效来同步它。只在触屏上同步：鼠标点按走的分支读 e.touches，桌面
+    // 设了会抛错；触屏点按/拖动走的正是这条竖向分支。
+    const syncRotateState = () => {
+      if (!touchPointer) return;
+      const rotated =
+        !!art.fullscreenWeb &&
+        typeof window !== 'undefined' &&
+        window.matchMedia('(orientation: portrait)').matches;
+      // isRotate 在类型里是 readonly，运行时是普通属性；本站自管旋转，必须同步它
+      (art as unknown as { isRotate: boolean }).isRotate = rotated;
+    };
     art.on('fullscreenWeb', (state: boolean) => {
       art.template?.$player?.classList.toggle('libretv-rotate-landscape', state);
+      syncRotateState();
     });
+    // 转手机会翻转媒体查询：resize（库在 orientationchange/resize 后派发）时重算，
+    // 否则横屏后 isRotate 还留着 true，进度条会继续按竖向算
+    art.on('resize', syncRotateState);
     art.on('resize', renderSkipMarks);
 
     /**
